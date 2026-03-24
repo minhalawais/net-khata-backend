@@ -41,7 +41,7 @@ def add_area(data, user_role, current_user_id, ip_address, user_agent):
         data,
         ip_address,
         user_agent,
-        company_id
+        data['company_id']
     )
 
     return new_area

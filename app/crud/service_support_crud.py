@@ -537,6 +537,224 @@ def get_technician_summary(company_id, start_date, end_date, limit=10):
     return result
 
 
+# ─── EXPORT FUNCTIONS ──────────────────────────────────────────────────────────
+# Production-grade Service Support export (XLSX)
+
+def export_service_support_tables(company_id, filters=None, export_format='xlsx', table='all'):
+    """
+    Export Service Support data in XLSX format.
+    
+    Args:
+        company_id: Company UUID
+        filters: Dict with start_date, end_date, etc.
+        export_format: 'xlsx' (CSV and PDF not available yet)
+        table: 'all' or specific table (open_complaints, overdue_tasks, technician_performance, inventory)
+    
+    Returns:
+        (file_obj, filename, mime_type)
+    """
+    import io
+    from datetime import datetime as dt_module
+    
+    try:
+        start_date, end_date = get_date_range(filters.get('start_date') if filters else None,
+                                               filters.get('end_date') if filters else None)
+        
+        timestamp = dt_module.now().strftime('%Y%m%d_%H%M%S')
+        
+        if export_format == 'xlsx':
+            return _export_service_support_xlsx(company_id, start_date, end_date, table, timestamp)
+        else:
+            raise ValueError(f"Unsupported format: {export_format}")
+            
+    except Exception as e:
+        logger.error(f"Error in export_service_support_tables: {str(e)}", exc_info=True)
+        raise
+
+
+def _export_service_support_xlsx(company_id, start_date, end_date, table, timestamp):
+    """Generate XLSX export with multiple sheets."""
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    except ImportError:
+        logger.warning("openpyxl not installed. Cannot export to XLSX.")
+        raise ValueError("XLSX export not available")
+    
+    try:
+        import io
+        from openpyxl import Workbook
+        
+        wb = Workbook()
+        wb.remove(wb.active)  # Remove default sheet
+        
+        # Define styles - matching design system (Skill 04)
+        header_fill = PatternFill(start_color="0070C0", end_color="0070C0", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=12)
+        summary_fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+        summary_font = Font(bold=True, size=11)
+        border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        # Export relevant tables based on 'table' parameter
+        if table in ('all', 'open_complaints'):
+            _add_open_complaints_sheet(wb, company_id, start_date, end_date, header_fill, header_font, border)
+        
+        if table in ('all', 'overdue_tasks'):
+            _add_overdue_tasks_sheet(wb, company_id, header_fill, header_font, border)
+        
+        if table in ('all', 'technician_performance'):
+            _add_technician_performance_sheet(wb, company_id, start_date, end_date, header_fill, header_font, border)
+        
+        if table in ('all', 'inventory'):
+            _add_inventory_sheet(wb, company_id, header_fill, header_font, border)
+        
+        # Save to BytesIO
+        file_obj = io.BytesIO()
+        wb.save(file_obj)
+        file_obj.seek(0)
+        
+        filename = f"Service-Support-Report-{timestamp}.xlsx"
+        mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        
+        logger.info(f"XLSX export completed: {filename}")
+        return file_obj, filename, mime_type
+        
+    except Exception as e:
+        logger.error(f"Error in _export_service_support_xlsx: {str(e)}", exc_info=True)
+        raise
+
+
+def _add_open_complaints_sheet(wb, company_id, start_date, end_date, header_fill, header_font, border):
+    """Add open complaints sheet to workbook."""
+    try:
+        ws = wb.create_sheet("Open Complaints")
+        
+        # Headers
+        headers = ['Ticket #', 'Customer', 'Area', 'Status', 'Created', 'SLA Due', 'Days Overdue', 'Assigned To']
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.border = border
+        
+        # Get open complaints
+        complaints = get_open_complaints_table(company_id, start_date, end_date)
+        
+        for row_idx, complaint in enumerate(complaints, 2):
+            ws.cell(row=row_idx, column=1, value=complaint.get('ticket_number', '')).border = border
+            ws.cell(row=row_idx, column=2, value=complaint.get('customer_name', '')).border = border
+            ws.cell(row=row_idx, column=3, value=complaint.get('area', '')).border = border
+            ws.cell(row=row_idx, column=4, value=complaint.get('status', '')).border = border
+            ws.cell(row=row_idx, column=5, value=complaint.get('created_at', '')).border = border
+            ws.cell(row=row_idx, column=6, value=complaint.get('sla_due', '')).border = border
+            ws.cell(row=row_idx, column=7, value=int(complaint.get('days_overdue', 0))).border = border
+            ws.cell(row=row_idx, column=8, value=complaint.get('assigned_to', '')).border = border
+        
+        # Set column widths
+        ws.column_dimensions['A'].width = 15
+        ws.column_dimensions['B'].width = 25
+        ws.column_dimensions['C'].width = 15
+        ws.column_dimensions['D'].width = 12
+        ws.column_dimensions['E'].width = 15
+        ws.column_dimensions['F'].width = 15
+        ws.column_dimensions['G'].width = 12
+        ws.column_dimensions['H'].width = 15
+        
+    except Exception as e:
+        logger.warning(f"Error adding open complaints sheet: {str(e)}")
+
+
+def _add_overdue_tasks_sheet(wb, company_id, header_fill, header_font, border):
+    """Add overdue tasks sheet to workbook."""
+    try:
+        ws = wb.create_sheet("Overdue Tasks")
+        
+        headers = ['Task ID', 'Type', 'Assigned To', 'Due Date', 'Days Overdue', 'Status']
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.border = border
+        
+        # Get overdue tasks
+        overdue_tasks = get_overdue_tasks(company_id)
+        
+        for row_idx, task in enumerate(overdue_tasks, 2):
+            ws.cell(row=row_idx, column=1, value=task.get('id', '')[:8]).border = border
+            ws.cell(row=row_idx, column=2, value=task.get('task_type', '')).border = border
+            ws.cell(row=row_idx, column=3, value=task.get('assigned_to', '')).border = border
+            ws.cell(row=row_idx, column=4, value=task.get('due_date', '')).border = border
+            ws.cell(row=row_idx, column=5, value=int(task.get('days_overdue', 0))).border = border
+            ws.cell(row=row_idx, column=6, value=task.get('status', '')).border = border
+        
+        # Set column widths
+        for col in ['A', 'B', 'C', 'D', 'E', 'F']:
+            ws.column_dimensions[col].width = 18
+        
+    except Exception as e:
+        logger.warning(f"Error adding overdue tasks sheet: {str(e)}")
+
+
+def _add_technician_performance_sheet(wb, company_id, start_date, end_date, header_fill, header_font, border):
+    """Add technician performance sheet to workbook."""
+    try:
+        ws = wb.create_sheet("Technician Performance")
+        
+        headers = ['Technician', 'Complaints Resolved', 'Avg Resolution (hrs)', 'CSAT Score']
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.border = border
+        
+        # Get technician summary
+        technicians = get_technician_summary(company_id, start_date, end_date)
+        
+        for row_idx, tech in enumerate(technicians, 2):
+            ws.cell(row=row_idx, column=1, value=tech.get('name', '')).border = border
+            ws.cell(row=row_idx, column=2, value=int(tech.get('resolved', 0))).border = border
+            ws.cell(row=row_idx, column=3, value=float(tech.get('avg_resolution_hours', 0))).border = border
+            ws.cell(row=row_idx, column=4, value=float(tech.get('csat_score', 0))).border = border
+        
+        # Set column widths
+        ws.column_dimensions['A'].width = 25
+        ws.column_dimensions['B'].width = 20
+        ws.column_dimensions['C'].width = 22
+        ws.column_dimensions['D'].width = 15
+        
+    except Exception as e:
+        logger.warning(f"Error adding technician performance sheet: {str(e)}")
+
+
+def _add_inventory_sheet(wb, company_id, header_fill, header_font, border):
+    """Add inventory sheet to workbook."""
+    try:
+        ws = wb.create_sheet("Inventory")
+        
+        headers = ['Item Type', 'Available', 'Assigned', 'Used', 'Total']
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.border = border
+        
+        # Placeholder - integrate with actual inventory data
+        # For now, this is a template that can be extended
+        
+        ws.column_dimensions['A'].width = 20
+        for col in ['B', 'C', 'D', 'E']:
+            ws.column_dimensions[col].width = 15
+        
+    except Exception as e:
+        logger.warning(f"Error adding inventory sheet: {str(e)}")
+        
+
+
 def get_filter_options(company_id):
     """Get available filter options."""
     # Areas

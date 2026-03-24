@@ -27,6 +27,7 @@ def add_new_area():
         new_area = area_crud.add_area(data, user_role, current_user_id, ip_address, user_agent)
         return jsonify({'message': 'Area/Zone added successfully', 'id': str(new_area.id)}), 201
     except Exception as e:
+        print(f"Error occurred while adding area: {e}")
         return jsonify({'error': 'Failed to add Area/Zone', 'message': str(e)}), 400
 
 @main.route('/areas/update/<string:id>', methods=['PUT'])

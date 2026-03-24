@@ -117,7 +117,21 @@ async def get_customers():
     company_id = claims['company_id']
     user_role = claims['role']
     employee_id = get_jwt_identity()
-    customers = await customer_crud.get_all_customers(company_id, user_role, employee_id)
+
+    paginate = request.args.get('paginate', 'false').lower() == 'true'
+    page = request.args.get('page', default=1, type=int)
+    page_size = request.args.get('page_size', default=50, type=int)
+    search = request.args.get('search', default='', type=str)
+
+    customers = await customer_crud.get_all_customers(
+        company_id,
+        user_role,
+        employee_id,
+        page=page,
+        page_size=page_size,
+        search=search,
+        paginate=paginate,
+    )
     return jsonify(customers), 200
 
 @main.route('/customers/check-internet-id/<string:internet_id>', methods=['GET'])
@@ -271,7 +285,19 @@ async def toggle_customer_active_status(id):
     current_user_id = get_jwt_identity()
     ip_address = request.remote_addr
     user_agent = request.headers.get('User-Agent')
-    customer = await customer_crud.toggle_customer_status(id, company_id, user_role, current_user_id, ip_address, user_agent)
+
+    payload = request.get_json(silent=True) or {}
+    deactivation_reason = payload.get('deactivated_reason')
+
+    customer = await customer_crud.toggle_customer_status(
+        id,
+        company_id,
+        user_role,
+        current_user_id,
+        ip_address,
+        user_agent,
+        deactivation_reason=deactivation_reason,
+    )
     if customer:
         return jsonify({'message': f"Customer {'activated' if customer.is_active else 'deactivated'} successfully"}), 200
     return jsonify({'message': 'Customer not found'}), 404

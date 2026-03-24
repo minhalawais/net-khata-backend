@@ -45,6 +45,7 @@ def get_all_tasks(company_id, user_role, employee_id=None):
             result.append({
                 'id': str(task.id),
                 'company_id': str(task.company_id),
+                'title': task.title,
                 'customer_id': str(task.customer_id) if task.customer_id else None,
                 'customer_name': customer_name,
                 'task_type': task.task_type,
@@ -77,6 +78,7 @@ def add_task(data, current_user_id, ip_address, user_agent, company_id):
         
         new_task = Task(
             company_id=uuid.UUID(company_id),
+            title=data.get('title', 'New Task'),
             customer_id=uuid.UUID(data['customer_id']) if data.get('customer_id') else None,
             task_type=data.get('task_type', 'maintenance'),
             priority=data.get('priority', 'medium'),
@@ -141,6 +143,7 @@ def update_task(id, data, company_id, user_role, current_user_id, ip_address, us
 
         # Preserve old values for logging
         old_values = {
+            'title': task.title,
             'task_type': task.task_type,
             'priority': task.priority,
             'due_date': task.due_date.isoformat() if task.due_date else None,
@@ -151,6 +154,9 @@ def update_task(id, data, company_id, user_role, current_user_id, ip_address, us
         }
 
         # Update fields
+        if 'title' in data:
+            task.title = data['title']
+            
         if 'task_type' in data:
             task.task_type = data['task_type']
         

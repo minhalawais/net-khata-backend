@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
+PAYOUT_TRANSACTION_TYPES = {'payout', 'salary_payout', 'commission_payout'}
 
 def get_employee_profile(employee_id, company_id, user_role):
     """Get comprehensive employee profile with all analytics"""
@@ -84,7 +85,7 @@ def _get_financial_metrics(employee_id):
         
         total_payouts = abs(sum(
             float(entry.amount) for entry in ledger_entries 
-            if entry.transaction_type == 'payout'
+            if entry.transaction_type in PAYOUT_TRANSACTION_TYPES
         ))
         
         total_salary = sum(

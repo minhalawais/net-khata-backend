@@ -406,8 +406,8 @@ def get_inventory_assignments(company_id, inventory_item_id=None):
         'id': str(assignment.id),
         'inventory_item_id': str(assignment.inventory_item_id),
         'inventory_item_type': assignment.inventory_item.item_type,
-        'assigned_to_customer': assignment.customer.full_name if assignment.customer else None,
-        'assigned_to_employee': assignment.employee.full_name if assignment.employee else None,
+        'assigned_to_customer': f"{assignment.customer.first_name or ''} {assignment.customer.last_name or ''}".strip() if assignment.customer else None,
+        'assigned_to_employee': f"{assignment.employee.first_name or ''} {assignment.employee.last_name or ''}".strip() if assignment.employee else None,
         'assigned_at': assignment.assigned_at.isoformat(),
         'returned_at': assignment.returned_at.isoformat() if assignment.returned_at else None,
         'status': assignment.status

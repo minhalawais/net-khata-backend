@@ -1,14 +1,10 @@
-from flask import Blueprint, jsonify,request
-from flask_jwt_extended import jwt_required, get_jwt_identity,get_jwt
+from flask import Blueprint, jsonify, request, send_file
+from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from app.crud import dashboard_crud
 from app.crud import executive_dashboard_crud
-from app.crud import customer_dashboard_crud
 from app.crud import service_support_crud
-from app.crud import inventory_dashboard_crud
-from app.crud import employee_dashboard_crud
-from app.crud import area_analytics_crud
-from app.crud import service_plan_crud
-from app.models import User
+from app.crud import financial_dashboard_crud
+from app.crud import operations_dashboard_crud
 from . import main
 import logging
 dashboard = Blueprint('dashboard', __name__)
@@ -32,13 +28,12 @@ def get_executive_summary():
 @jwt_required()
 def get_executive_advanced():
     """
-    Advanced Executive Dashboard with all KPIs, charts, and filters.
-    
+    Executive Dashboard — Owner's morning overview.
+
     Query Parameters:
         - start_date, end_date: Date range (YYYY-MM-DD)
-        - area_id, isp_id, service_plan_id: Dimension filters
-        - payment_method: Filter by payment method
-        - compare: Comparison period (last_month, last_quarter, last_year)
+        - area_id: Area filter (UUID or 'all')
+        - isp_id: ISP filter (UUID or 'all')
     """
     claims = get_jwt()
     company_id = claims['company_id']
@@ -48,9 +43,6 @@ def get_executive_advanced():
         'end_date': request.args.get('end_date'),
         'area_id': request.args.get('area_id', 'all'),
         'isp_id': request.args.get('isp_id', 'all'),
-        'service_plan_id': request.args.get('service_plan_id', 'all'),
-        'payment_method': request.args.get('payment_method', 'all'),
-        'compare': request.args.get('compare', 'last_month')
     }
     
     try:
@@ -59,54 +51,6 @@ def get_executive_advanced():
     except Exception as e:
         logger.error(f"Error in executive-advanced: {str(e)}")
         return jsonify({'error': 'Failed to fetch executive dashboard data'}), 500
-
-
-
-@main.route('/dashboard/customer-analytics', methods=['GET'])
-@jwt_required()
-def get_customer_analytics():
-    current_user = get_jwt_identity()
-    claims = get_jwt()
-    company_id = claims['company_id']
-    
-    data = dashboard_crud.get_customer_analytics_data(company_id)
-    return jsonify(data)
-
-
-@main.route('/dashboard/customer-advanced', methods=['GET'])
-@jwt_required()
-def get_customer_advanced():
-    """
-    Advanced Customer Dashboard with all KPIs, charts, and filters.
-    
-    Query Parameters:
-        - start_date, end_date: Date range (YYYY-MM-DD)
-        - area_id, sub_zone_id, isp_id, service_plan_id: Dimension filters
-        - connection_type: Filter by connection type
-        - status: Filter by customer status (active, inactive, all)
-        - compare: Comparison period (last_month, last_quarter, last_year)
-    """
-    claims = get_jwt()
-    company_id = claims['company_id']
-    
-    filters = {
-        'start_date': request.args.get('start_date'),
-        'end_date': request.args.get('end_date'),
-        'area_id': request.args.get('area_id', 'all'),
-        'sub_zone_id': request.args.get('sub_zone_id', 'all'),
-        'isp_id': request.args.get('isp_id', 'all'),
-        'service_plan_id': request.args.get('service_plan_id', 'all'),
-        'connection_type': request.args.get('connection_type', 'all'),
-        'status': request.args.get('status', 'all'),
-        'compare': request.args.get('compare', 'last_month')
-    }
-    
-    try:
-        data = customer_dashboard_crud.get_customer_dashboard_advanced(company_id, filters)
-        return jsonify(data), 200
-    except Exception as e:
-        logger.error(f"Error in customer-advanced: {str(e)}")
-        return jsonify({'error': 'Failed to fetch customer dashboard data'}), 500
 
 
 
@@ -135,93 +79,26 @@ def get_service_support_metrics():
 @jwt_required()
 def get_service_support_advanced():
     """
-    Advanced Service Support Dashboard with all KPIs, charts, and filters.
-    
+    Operations & Network Dashboard — consolidates Service & Support,
+    Inventory, Area Analytics, Service Plans, and Employee Performance.
+
     Query Parameters:
         - start_date, end_date: Date range (YYYY-MM-DD)
-        - status: Complaint status filter
-        - priority: Priority filter
-        - area_id, technician_id: Dimension filters
-        - compare: Comparison period (last_month, last_year)
     """
     claims = get_jwt()
     company_id = claims['company_id']
-    
+
     filters = {
         'start_date': request.args.get('start_date'),
         'end_date': request.args.get('end_date'),
-        'status': request.args.get('status', 'all'),
-        'priority': request.args.get('priority', 'all'),
-        'area_id': request.args.get('area_id', 'all'),
-        'technician_id': request.args.get('technician_id', 'all'),
-        'compare': request.args.get('compare', 'last_month')
     }
-    
+
     try:
-        data = service_support_crud.get_service_support_advanced(company_id, filters)
+        data = operations_dashboard_crud.get_operations_dashboard_data(company_id, filters)
         return jsonify(data), 200
     except Exception as e:
-        logger.error(f"Error in service-support-advanced: {str(e)}")
-        return jsonify({'error': 'Failed to fetch service support dashboard data'}), 500
-
-
-@main.route('/dashboard/inventory-management', methods=['GET'])
-@jwt_required()
-def get_inventory_management_data():
-    current_user = get_jwt_identity()
-    claims = get_jwt()
-    company_id = claims['company_id']
-    
-    stock_level_data = dashboard_crud.get_stock_level_data(company_id)
-    inventory_movement_data = dashboard_crud.get_inventory_movement_data(company_id)
-    inventory_metrics = dashboard_crud.get_inventory_metrics(company_id)
-    
-    data = {
-        'stock_level_data': stock_level_data,
-        'inventory_movement_data': inventory_movement_data,
-        'inventory_metrics': inventory_metrics
-    }
-    return jsonify(data)
-
-@main.route('/dashboard/employee-analytics', methods=['GET'])
-@jwt_required()
-def get_employee_analytics():
-    current_user = get_jwt_identity()
-    claims = get_jwt()
-    company_id = claims['company_id']
-    
-    data = dashboard_crud.get_employee_analytics_data(company_id)
-    return jsonify(data)
-
-@main.route('/dashboard/area-analytics', methods=['GET'])
-@jwt_required()
-def get_area_analytics():
-    current_user = get_jwt_identity()
-    claims = get_jwt()
-    company_id = claims['company_id']
-    
-    data = dashboard_crud.get_area_analytics_data(company_id)
-    return jsonify(data)
-
-@main.route('/dashboard/service-plan-analytics', methods=['GET'])
-@jwt_required()
-def get_service_plan_analytics():
-    current_user = get_jwt_identity()
-    claims = get_jwt()
-    company_id = claims['company_id']
-    
-    data = dashboard_crud.get_service_plan_analytics_data(company_id)
-    return jsonify(data)
-
-@main.route('/dashboard/recovery-collections', methods=['GET'])
-@jwt_required()
-def get_recovery_collections():
-    current_user = get_jwt_identity()
-    claims = get_jwt()
-    company_id = claims['company_id']
-    
-    data = dashboard_crud.get_recovery_collections_data(company_id)
-    return jsonify(data)
+        logger.error(f"Error in operations dashboard: {str(e)}")
+        return jsonify({'error': 'Failed to fetch operations dashboard data'}), 500
 
 
 @main.route('/dashboard/bank-account-analytics', methods=['GET'])
@@ -248,22 +125,46 @@ def get_unified_financial_data():
     claims = get_jwt()
     company_id = claims['company_id']
     
-    # Get filters from query parameters
+    # Simplified filters — date range only
+    filters = {
+        'start_date': request.args.get('start_date'),
+        'end_date': request.args.get('end_date'),
+    }
+    
+    try:
+        data = financial_dashboard_crud.get_financial_dashboard_data(company_id, filters)
+        return jsonify(data), 200
+    except Exception as e:
+        logger.error(f"Error fetching financial dashboard data: {str(e)}")
+        return jsonify({'error': 'Failed to fetch financial dashboard data'}), 500
+
+
+@main.route('/dashboard/financial-intelligence', methods=['GET'])
+@main.route('/dashboard/financial-intelligence-v2', methods=['GET'])
+@jwt_required()
+def get_financial_intelligence():
+    """Financial intelligence contract endpoint."""
+    claims = get_jwt()
+    company_id = claims['company_id']
+
     filters = {
         'start_date': request.args.get('start_date'),
         'end_date': request.args.get('end_date'),
         'bank_account_id': request.args.get('bank_account_id', 'all'),
         'payment_method': request.args.get('payment_method', 'all'),
         'invoice_status': request.args.get('invoice_status', 'all'),
-        'isp_payment_type': request.args.get('isp_payment_type', 'all')
+        'isp_payment_type': request.args.get('isp_payment_type', 'all'),
+        'time_range': request.args.get('time_range', 'mtd'),
     }
-    
+
     try:
-        data = dashboard_crud.get_unified_financial_data(company_id, filters)
+        data = financial_dashboard_crud.get_financial_intelligence_v2(company_id, filters)
+        if isinstance(data, dict) and data.get('error'):
+            return jsonify(data), 500
         return jsonify(data), 200
     except Exception as e:
-        logger.error(f"Error fetching unified financial data: {str(e)}")
-        return jsonify({'error': 'Failed to fetch unified financial data'}), 500
+        logger.error(f"Error fetching financial intelligence: {str(e)}")
+        return jsonify({'error': 'Failed to fetch financial intelligence data'}), 500
 
 @main.route('/dashboard/ledger', methods=['GET'])
 @jwt_required()
@@ -281,115 +182,46 @@ def get_ledger():
     data = dashboard_crud.get_ledger_data(company_id, filters)
     return jsonify(data), 200
 
-
-@main.route('/dashboard/inventory-advanced', methods=['GET'])
+@main.route('/dashboard/ledger/export', methods=['GET'])
 @jwt_required()
-def get_inventory_advanced():
+def export_ledger():
     """
-    Advanced Inventory Dashboard with all KPIs, charts, and filters.
+    Export ledger data in CSV, XLSX, or PDF format.
     
     Query Parameters:
+        - format: 'csv', 'xlsx', or 'pdf' (default: csv)
         - start_date, end_date: Date range (YYYY-MM-DD)
-        - item_type, supplier_id: Dimension filters
-        - status: Stock status filter
-        - compare: Comparison period (last_month, last_year)
+        - bank_account_id: Bank account filter UUID or 'all'
+        - payment_method: Payment method filter or 'all'
+        - invoice_status: Invoice status filter or 'all'
+        - isp_payment_type: ISP payment type filter or 'all'
     """
     claims = get_jwt()
     company_id = claims['company_id']
+    export_format = request.args.get('format', 'csv').lower()
+    
+    if export_format not in ['csv', 'xlsx', 'pdf']:
+        return jsonify({'error': 'Invalid format. Supported formats: csv, xlsx, pdf'}), 400
     
     filters = {
         'start_date': request.args.get('start_date'),
         'end_date': request.args.get('end_date'),
-        'item_type': request.args.get('item_type', 'all'),
-        'supplier_id': request.args.get('supplier_id', 'all'),
-        'status': request.args.get('status', 'all'),
-        'compare': request.args.get('compare', 'last_month')
+        'bank_account_id': request.args.get('bank_account_id', 'all'),
+        'payment_method': request.args.get('payment_method', 'all'),
+        'invoice_status': request.args.get('invoice_status', 'all'),
+        'isp_payment_type': request.args.get('isp_payment_type', 'all'),
     }
     
     try:
-        data = inventory_dashboard_crud.get_inventory_advanced(company_id, filters)
-        return jsonify(data), 200
+        file_obj, filename, mime_type = dashboard_crud.export_ledger_data(company_id, filters, export_format)
+        return send_file(
+            file_obj,
+            mimetype=mime_type,
+            as_attachment=True,
+            download_name=filename
+        )
     except Exception as e:
-        logger.error(f"Error in inventory-advanced: {str(e)}")
-        return jsonify({'error': 'Failed to fetch inventory dashboard data'}), 500
+        logger.error(f"Error exporting ledger: {str(e)}")
+        return jsonify({'error': f'Failed to export ledger data: {str(e)}'}), 500
 
 
-@main.route('/dashboard/employee-advanced', methods=['GET'])
-@jwt_required()
-def get_employee_advanced():
-    """
-    Advanced Employee Dashboard with all KPIs, charts, and filters.
-    
-    Query Parameters:
-        - start_date, end_date: Date range (YYYY-MM-DD)
-        - role: Employee role filter
-        - status: Active/Inactive filter
-        - compare: Comparison period (last_month, last_year)
-    """
-    claims = get_jwt()
-    company_id = claims['company_id']
-    
-    filters = {
-        'start_date': request.args.get('start_date'),
-        'end_date': request.args.get('end_date'),
-        'role': request.args.get('role', 'all'),
-        'status': request.args.get('status', 'all'),
-        'compare': request.args.get('compare', 'last_month')
-    }
-    
-    try:
-        data = employee_dashboard_crud.get_employee_advanced(company_id, filters)
-        return jsonify(data), 200
-    except Exception as e:
-        logger.error(f"Error in employee-advanced: {str(e)}")
-        return jsonify({'error': 'Failed to fetch employee dashboard data'}), 500
-
-
-@main.route('/dashboard/regional-advanced', methods=['GET'])
-@jwt_required()
-def get_regional_advanced():
-    """
-    Advanced Regional Dashboard with all KPIs, charts, and filters.
-    """
-    claims = get_jwt()
-    company_id = claims['company_id']
-    
-    filters = {
-        'start_date': request.args.get('start_date'),
-        'end_date': request.args.get('end_date'),
-        'area_ids': request.args.get('area_ids', 'all'),
-        'plan_id': request.args.get('plan_id', 'all'),
-        'compare': request.args.get('compare', 'last_month')
-    }
-    
-    try:
-        data = area_analytics_crud.get_area_advanced(company_id, filters)
-        return jsonify(data), 200
-    except Exception as e:
-        logger.error(f"Error in regional-advanced: {str(e)}")
-        return jsonify({'error': 'Failed to fetch regional dashboard data'}), 500
-
-
-@main.route('/dashboard/service-plan-advanced', methods=['GET'])
-@jwt_required()
-def get_service_plan_advanced():
-    """
-    Advanced Service Plan Dashboard with all KPIs, charts, and filters.
-    """
-    claims = get_jwt()
-    company_id = claims['company_id']
-    
-    filters = {
-        'start_date': request.args.get('start_date'),
-        'end_date': request.args.get('end_date'),
-        'plan_ids': request.args.get('plan_ids', 'all'),
-        'status': request.args.get('status', 'all'),
-        'compare': request.args.get('compare', 'last_month')
-    }
-    
-    try:
-        data = service_plan_crud.get_service_plan_advanced(company_id, filters)
-        return jsonify(data), 200
-    except Exception as e:
-        logger.error(f"Error in service-plan-advanced: {str(e)}")
-        return jsonify({'error': 'Failed to fetch service plan dashboard data'}), 500

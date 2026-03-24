@@ -149,6 +149,8 @@ class Customer(db.Model):
     cnic_back_image = db.Column(db.String(200))
     created_at = db.Column(db.TIMESTAMP(timezone=True), server_default=db.func.current_timestamp())
     updated_at = db.Column(db.TIMESTAMP(timezone=True), server_default=db.func.current_timestamp(), onupdate=db.func.current_timestamp())
+    deactivated_at = db.Column(db.TIMESTAMP(timezone=True))
+    deactivated_reason = db.Column(db.String(255))
     # New fields
     connection_type = db.Column(db.String(20), nullable=False)
     internet_connection_type = db.Column(db.String(20))
@@ -485,6 +487,7 @@ class Task(db.Model):
     __tablename__ = 'tasks'
     id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     company_id = db.Column(UUID(as_uuid=True), db.ForeignKey('companies.id'))
+    title = db.Column(db.String(255), nullable=False)
     customer_id = db.Column(UUID(as_uuid=True), db.ForeignKey('customers.id'), nullable=True)  # Optional customer reference
     task_type = db.Column(db.String(50), nullable=False)  # installation, maintenance, complaint, recovery
     priority = db.Column(db.String(20), default='medium')  # low, medium, high, critical

@@ -19,6 +19,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 PKT = timezone('Asia/Karachi')
+PAYOUT_TRANSACTION_TYPES = ['payout', 'salary_payout', 'commission_payout']
 
 
 def get_date_range(start_date_str, end_date_str):
@@ -149,7 +150,7 @@ def get_all_kpis(company_id, start_date, end_date, prev_start, prev_end, role=No
         User, EmployeeLedger.employee_id == User.id
     ).filter(
         User.company_id == company_id,
-        EmployeeLedger.transaction_type == 'payout',
+        EmployeeLedger.transaction_type.in_(PAYOUT_TRANSACTION_TYPES),
         EmployeeLedger.created_at >= start_date,
         EmployeeLedger.created_at <= end_date
     ).scalar() or 0
@@ -158,7 +159,7 @@ def get_all_kpis(company_id, start_date, end_date, prev_start, prev_end, role=No
         User, EmployeeLedger.employee_id == User.id
     ).filter(
         User.company_id == company_id,
-        EmployeeLedger.transaction_type == 'payout',
+        EmployeeLedger.transaction_type.in_(PAYOUT_TRANSACTION_TYPES),
         EmployeeLedger.created_at >= prev_start,
         EmployeeLedger.created_at <= prev_end
     ).scalar() or 0
@@ -451,7 +452,7 @@ def get_recent_payouts(company_id, start_date, end_date, limit=10):
         User, EmployeeLedger.employee_id == User.id
     ).filter(
         User.company_id == company_id,
-        EmployeeLedger.transaction_type == 'payout',
+        EmployeeLedger.transaction_type.in_(PAYOUT_TRANSACTION_TYPES),
         EmployeeLedger.created_at >= start_date,
         EmployeeLedger.created_at <= end_date
     ).order_by(EmployeeLedger.created_at.desc()).limit(limit).all()

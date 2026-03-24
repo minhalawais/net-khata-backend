@@ -95,6 +95,15 @@ def add_expense(data, user_role, current_user_id, ip_address, user_agent):
         # If this is an employee payment, update employee balances and add ledger entry
         if employee_id:
             amount = float(data['amount'])
+            payout_category = str(data.get('employee_payout_category') or '').strip().lower()
+            payout_type_map = {
+                'salary': 'salary_payout',
+                'commission': 'commission_payout',
+            }
+            ledger_transaction_type = payout_type_map.get(payout_category)
+            if not ledger_transaction_type:
+                raise ValueError("employee_payout_category is required for employee payments and must be 'salary' or 'commission'")
+
             employee = User.query.get(employee_id)
             if employee:
                 # Update employee paid_amount only (current_balance is updated by ledger entry)
@@ -104,7 +113,7 @@ def add_expense(data, user_role, current_user_id, ip_address, user_agent):
                 # Add ledger entry for the payment (this updates current_balance automatically)
                 employee_ledger_crud.add_ledger_entry(
                     employee_id=employee_id,
-                    transaction_type='payout',
+                    transaction_type=ledger_transaction_type,
                     amount=-amount,  # Negative because it reduces balance
                     description=f"Payment via expense: {data.get('description', 'Employee Payment')}",
                     company_id=data['company_id'],

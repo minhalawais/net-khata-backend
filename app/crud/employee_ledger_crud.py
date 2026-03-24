@@ -7,6 +7,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+ALLOWED_LEDGER_TRANSACTION_TYPES = {
+    'connection_commission',
+    'complaint_commission',
+    'salary_accrual',
+    'salary_payout',
+    'commission_payout',
+    'adjustment',
+}
+
 def add_ledger_entry(employee_id, transaction_type, amount, description, company_id, reference_id=None, current_user_id=None, ip_address=None, user_agent=None):
     """
     Creates a new ledger entry for an employee and updates their current balance.
@@ -23,6 +32,13 @@ def add_ledger_entry(employee_id, transaction_type, amount, description, company
         EmployeeLedger: The created ledger entry object
     """
     try:
+        normalized_type = str(transaction_type or '').strip().lower()
+        if normalized_type == 'payout':
+            raise ValueError("'payout' is no longer allowed. Use 'salary_payout' or 'commission_payout'.")
+        if normalized_type not in ALLOWED_LEDGER_TRANSACTION_TYPES:
+            allowed_types = ', '.join(sorted(ALLOWED_LEDGER_TRANSACTION_TYPES))
+            raise ValueError(f"Invalid transaction_type '{transaction_type}'. Allowed values: {allowed_types}")
+
         # Convert amount to float for calculation if it matches db numeric type
         amount_val = float(amount)
         
@@ -30,7 +46,7 @@ def add_ledger_entry(employee_id, transaction_type, amount, description, company
         new_entry = EmployeeLedger(
             employee_id=uuid.UUID(str(employee_id)),
             company_id=uuid.UUID(str(company_id)),
-            transaction_type=transaction_type,
+            transaction_type=normalized_type,
             amount=amount_val,
             description=description,
             reference_id=uuid.UUID(str(reference_id)) if reference_id else None

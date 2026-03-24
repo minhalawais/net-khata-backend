@@ -4,6 +4,7 @@ from sqlalchemy import func, case, desc
 from datetime import datetime, timedelta
 from decimal import Decimal
 import logging
+import io
 from pytz import UTC
 from sqlalchemy.exc import SQLAlchemyError
 from pytz import UTC  # Ensures consistent timezone handling
@@ -2764,3 +2765,718 @@ def get_ledger_data(company_id, filters=None):
             'bank_accounts': bank_accounts_list, 
             'stats': { 'credits': 0, 'debits': 0, 'net': 0, 'count': 0 } 
         }
+
+
+def export_ledger_data(company_id, filters=None, export_format='csv'):
+    """
+    Export ledger data in CSV, XLSX, or PDF format.
+    
+    Args:
+        company_id: Company UUID
+        filters: Filter dictionary with start_date, end_date, bank_account_id, etc.
+        export_format: 'csv', 'xlsx', or 'pdf'
+    
+    Returns:
+        Tuple of (file_object, filename, mime_type)
+    """
+    import csv
+    import io
+    from datetime import datetime as dt
+    
+    try:
+        # Validate company_id
+        if not company_id:
+            raise ValueError("company_id is required")
+        
+        # Ensure filters is a dictionary
+        if filters is None:
+            filters = {}
+        
+        logger.info(f"Starting ledger export: format={export_format}, filters={filters}")
+        
+        # Get ledger data using existing function
+        ledger_data = get_ledger_data(company_id, filters)
+        
+        # Defensive check: ensure ledger_data is not None
+        if ledger_data is None:
+            logger.error("get_ledger_data() returned None")
+            ledger_data = {'items': []}
+        
+        # Ensure ledger_data is a dictionary
+        if not isinstance(ledger_data, dict):
+            logger.error(f"get_ledger_data() returned non-dict type: {type(ledger_data)}")
+            ledger_data = {'items': []}
+        
+        items = ledger_data.get('items', [])
+        
+        # Validate items is a list
+        if not isinstance(items, list):
+            logger.warning(f"items is not a list, got {type(items)}, converting to empty list")
+            items = []
+        
+        logger.info(f"Retrieved {len(items)} items for export")
+        
+        # Prepare timestamp for filename
+        now = dt.now().strftime('%Y%m%d_%H%M%S')
+        
+        if export_format == 'csv':
+            return _export_csv(items, now)
+        elif export_format == 'xlsx':
+            return _export_xlsx(items, now)
+        elif export_format == 'pdf':
+            return _export_pdf(items, now)
+        else:
+            raise ValueError(f"Unsupported export format: {export_format}")
+            
+    except Exception as e:
+        logger.error(f"Error exporting ledger data: {str(e)}", exc_info=True)
+        raise
+
+
+def _export_csv(items, timestamp):
+    """Generate CSV export of ledger items."""
+    import csv
+    import io
+    
+    try:
+        # Defensive: ensure items is a list of dicts
+        if not isinstance(items, list):
+            logger.warning(f"items is not a list in CSV export, converting from {type(items)}")
+            items = []
+        
+        # Filter out None items
+        items = [item for item in items if item is not None and isinstance(item, dict)]
+        logger.info(f"CSV export: processing {len(items)} valid items")
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header — Direction column removed; sign encoded in Amount
+        headers = ['Date', 'Type', 'Reference', 'Description', 'Method', 'Bank Account', 'Amount (PKR)']
+        writer.writerow(headers)
+        
+        # Write data rows
+        for item in items:
+            try:
+                # Safely extract item fields with defaults
+                date_str = str(item.get('date', '') or '')[:10]
+                type_str = (item.get('type', '') or '').replace('_', ' ').title()
+                ref_str = str(item.get('reference', '') or '')
+                desc_str = str(item.get('description', '') or '')
+                method_str = (item.get('method', '') or '').replace('_', ' ').title()
+                bank_str = str(item.get('bank_account', '') or '')
+                direction = (item.get('direction', '') or '').lower()
+                amount = item.get('amount', 0)
+                
+                # Handle amount conversion
+                try:
+                    amount_int = int(float(amount))
+                except (ValueError, TypeError):
+                    amount_int = 0
+                
+                # +/- prefix encodes direction in the amount column
+                signed_amount = f"+{amount_int:,}" if direction == 'credit' else f"-{amount_int:,}"
+                
+                writer.writerow([
+                    date_str,
+                    type_str,
+                    ref_str,
+                    desc_str,
+                    method_str,
+                    bank_str,
+                    signed_amount,
+                ])
+            except Exception as item_err:
+                logger.warning(f"Error processing item in CSV export: {str(item_err)}")
+                continue
+        
+        # Add summary rows
+        credits = sum(item.get('amount', 0) for item in items if item and item.get('direction') == 'credit')
+        debits = sum(item.get('amount', 0) for item in items if item and item.get('direction') == 'debit')
+        net = credits - debits
+        
+        writer.writerow([])
+        writer.writerow(['SUMMARY', '', '', '', '', 'Total Credits', f"+PKR {int(credits):,}"])
+        writer.writerow(['', '', '', '', '', 'Total Debits', f"-PKR {int(debits):,}"])
+        writer.writerow(['', '', '', '', '', 'Net Position', f"PKR {int(net):,}"])
+        writer.writerow(['', '', '', '', '', 'Total Transactions', len(items)])
+        
+        # Create file object
+        output.seek(0)
+        file_obj = io.BytesIO(output.getvalue().encode('utf-8'))
+        file_obj.seek(0)
+        
+        filename = f"Ledger-Statement-{timestamp}.csv"
+        mime_type = "text/csv"
+        
+        logger.info(f"CSV export completed successfully: {filename}")
+        return file_obj, filename, mime_type
+        
+    except Exception as csv_err:
+        logger.error(f"Error in CSV generation: {str(csv_err)}", exc_info=True)
+        raise
+    
+    return file_obj, filename, mime_type
+
+
+def _export_xlsx(items, timestamp):
+    """Generate XLSX export of ledger items."""
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    except ImportError:
+        logger.warning("openpyxl not installed. Falling back to CSV export.")
+        return _export_csv(items, timestamp)
+    
+    try:
+        # Defensive: ensure items is a list of dicts
+        if not isinstance(items, list):
+            logger.warning(f"items is not a list in XLSX export, converting from {type(items)}")
+            items = []
+        
+        # Filter out None items
+        items = [item for item in items if item is not None and isinstance(item, dict)]
+        logger.info(f"XLSX export: processing {len(items)} valid items")
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Ledger"
+        
+        # Define styles
+        header_fill = PatternFill(start_color="0070C0", end_color="0070C0", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=12)
+        summary_fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+        summary_font = Font(bold=True, size=11)
+        border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        # Write header — Direction column removed; sign encoded in Amount
+        headers = ['Date', 'Type', 'Reference', 'Description', 'Method', 'Bank Account', 'Amount (PKR)']
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = border
+        
+        # Write data rows
+        for row_idx, item in enumerate(items, 2):
+            try:
+                # Safely extract item fields with defaults
+                date_str = str(item.get('date', '') or '')[:10]
+                type_str = (item.get('type', '') or '').replace('_', ' ').title()
+                ref_str = str(item.get('reference', '') or '')
+                desc_str = str(item.get('description', '') or '')
+                method_str = (item.get('method', '') or '').replace('_', ' ').title()
+                bank_str = str(item.get('bank_account', '') or '')
+                direction = (item.get('direction', '') or '').lower()
+                amount = item.get('amount', 0)
+                
+                # Handle amount conversion
+                try:
+                    amount_int = int(float(amount))
+                except (ValueError, TypeError):
+                    amount_int = 0
+                
+                # Signed numeric value: positive for credit, negative for debit
+                signed_int = amount_int if direction == 'credit' else -amount_int
+                
+                ws.cell(row=row_idx, column=1, value=date_str)
+                ws.cell(row=row_idx, column=2, value=type_str)
+                ws.cell(row=row_idx, column=3, value=ref_str)
+                ws.cell(row=row_idx, column=4, value=desc_str)
+                ws.cell(row=row_idx, column=5, value=method_str)
+                ws.cell(row=row_idx, column=6, value=bank_str)
+                
+                amount_cell = ws.cell(row=row_idx, column=7, value=signed_int)
+                amount_cell.number_format = '+#,##0;-#,##0;0'  # shows + for positives
+                
+                # Colour code: green for credit, red for debit
+                from openpyxl.styles import Font as XlFont
+                amount_cell.font = XlFont(
+                    bold=True,
+                    color='059669' if direction == 'credit' else 'E11D48'
+                )
+                
+                for col in range(1, 8):
+                    ws.cell(row=row_idx, column=col).border = border
+                    
+            except Exception as item_err:
+                logger.warning(f"Error processing item {row_idx} in XLSX export: {str(item_err)}")
+                continue
+        
+        # Add summary section — column 5 label, column 7 value (7-col layout)
+        summary_row = len(items) + 3
+        credits = sum(item.get('amount', 0) for item in items if item and item.get('direction') == 'credit')
+        debits = sum(item.get('amount', 0) for item in items if item and item.get('direction') == 'debit')
+        net = credits - debits
+        
+        for row, label, value, color_hex in [
+            (summary_row,     'Total Credits',  int(credits), '059669'),
+            (summary_row + 1, 'Total Debits',   -int(debits), 'E11D48'),
+            (summary_row + 2, 'Net Position',   int(net),     '059669' if net >= 0 else 'E11D48'),
+            (summary_row + 3, 'Total Transactions', len(items), '334155'),
+        ]:
+            from openpyxl.styles import Font as XlFont
+            label_cell = ws.cell(row=row, column=5, value=label)
+            label_cell.font = summary_font
+            label_cell.fill = summary_fill
+            label_cell.border = border
+            
+            value_cell = ws.cell(row=row, column=7, value=value)
+            value_cell.font = XlFont(bold=True, color=color_hex, size=11)
+            value_cell.fill = summary_fill
+            value_cell.border = border
+            if isinstance(value, (int, float)):
+                value_cell.number_format = '+#,##0;-#,##0;0'
+        
+        # Set column widths — matches 7-column PDF layout
+        ws.column_dimensions['A'].width = 13  # Date
+        ws.column_dimensions['B'].width = 18  # Type
+        ws.column_dimensions['C'].width = 16  # Reference
+        ws.column_dimensions['D'].width = 34  # Description
+        ws.column_dimensions['E'].width = 16  # Method
+        ws.column_dimensions['F'].width = 22  # Bank Account
+        ws.column_dimensions['G'].width = 16  # Amount
+        
+        # Save to BytesIO
+        file_obj = io.BytesIO()
+        wb.save(file_obj)
+        file_obj.seek(0)
+        
+        filename = f"Ledger-Statement-{timestamp}.xlsx"
+        mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        
+        logger.info(f"XLSX export completed successfully: {filename}")
+        return file_obj, filename, mime_type
+        
+    except Exception as xlsx_err:
+        logger.error(f"Error in XLSX generation: {str(xlsx_err)}", exc_info=True)
+        # Fallback to CSV if XLSX fails
+        logger.info("Falling back to CSV export due to XLSX error")
+        return _export_csv(items, timestamp)
+
+
+def _export_pdf(items, timestamp):
+    """
+    Generate a production-grade PDF ledger statement.
+
+    Root causes of the previous text-overlap bug (all fixed here):
+
+    1. Fixed `rowHeights` — when rowHeights is specified, ReportLab uses EXACTLY
+       those heights. If a cell's Paragraph content is taller than the allocated
+       height, it clips and bleeds into the adjacent row. Rows allocated 0.30in
+       but needed 0.47in minimum (fontSize 8pt + leading 12pt + 8pt top + 8pt
+       bottom padding = 36pt ≈ 0.50in). Fix: omit rowHeights entirely — ReportLab
+       auto-sizes each row to fit its tallest Paragraph cell.
+
+    2. Column widths summed to 8.10in on a 7.27in printable area (A4 – 1in
+       margins) — all cells were rendered 10% narrower than intended, forcing
+       extra wrapping and compounding the overflow. Fix: columns now sum to
+       exactly 7.27in using 7 columns (Dir. column removed).
+
+    3. Dir. column removed — direction encoded as colour-coded +/− prefix on
+       the Amount cell (green for credit, rose for debit) per product requirement.
+
+    4. wordWrap='CJK' replaced with wordWrap='LTR' — CJK mode breaks at any
+       unicode character, not word boundaries, producing mid-word splits in
+       English text.
+    """
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.platypus import (
+            SimpleDocTemplate, Table, TableStyle, Paragraph,
+            Spacer, HRFlowable, Image as RLImage,
+        )
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch, mm
+        from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+        import os
+    except ImportError:
+        logger.warning("reportlab not installed. Falling back to CSV export.")
+        return _export_csv(items, timestamp)
+
+    try:
+        if not isinstance(items, list):
+            items = []
+        items = [i for i in items if i is not None and isinstance(i, dict)]
+        logger.info(f"PDF export: processing {len(items)} items")
+
+        # ── Design tokens (matches slate + blue-600 design system) ────────────
+        C_BLUE_700   = colors.HexColor('#1D4ED8')   # header background
+        C_BLUE_600   = colors.HexColor('#2563EB')   # title accent
+        C_BLUE_50    = colors.HexColor('#EFF6FF')   # even row tint
+        C_SLATE_900  = colors.HexColor('#0F172A')   # primary text
+        C_SLATE_700  = colors.HexColor('#334155')   # body text
+        C_SLATE_500  = colors.HexColor('#64748B')   # muted / labels
+        C_SLATE_400  = colors.HexColor('#94A3B8')   # footer / divider
+        C_SLATE_200  = colors.HexColor('#E2E8F0')   # grid lines
+        C_SLATE_100  = colors.HexColor('#F1F5F9')   # odd row background
+        C_WHITE      = colors.white
+        C_EMERALD    = colors.HexColor('#059669')   # credit (+) amounts
+        C_ROSE       = colors.HexColor('#E11D48')   # debit  (−) amounts
+        C_SUMMARY_BG = colors.HexColor('#EFF6FF')   # summary section background
+
+        # ── Page setup ─────────────────────────────────────────────────────────
+        # A4 = 595.28 × 841.89 pts; left/right margins 0.5in = 36pt each
+        # Available width = 595.28 − 72 = 523.28 pts = 7.27 in
+        LEFT_MARGIN  = 0.50 * inch
+        RIGHT_MARGIN = 0.50 * inch
+        TOP_MARGIN   = 0.55 * inch
+        BOT_MARGIN   = 0.50 * inch
+        AVAIL_W      = A4[0] - LEFT_MARGIN - RIGHT_MARGIN  # 523.28 pts
+
+        file_obj = io.BytesIO()
+        doc = SimpleDocTemplate(
+            file_obj,
+            pagesize=A4,
+            topMargin=TOP_MARGIN,
+            bottomMargin=BOT_MARGIN,
+            leftMargin=LEFT_MARGIN,
+            rightMargin=RIGHT_MARGIN,
+        )
+
+        # ── Typography ─────────────────────────────────────────────────────────
+        base = getSampleStyleSheet()
+
+        title_style = ParagraphStyle(
+            'LedgerTitle',
+            parent=base['Normal'],
+            fontSize=18,
+            leading=22,
+            textColor=C_BLUE_600,
+            fontName='Helvetica-Bold',
+            alignment=TA_CENTER,
+            spaceAfter=2,
+        )
+        subtitle_style = ParagraphStyle(
+            'LedgerSubtitle',
+            parent=base['Normal'],
+            fontSize=9,
+            leading=12,
+            textColor=C_SLATE_500,
+            alignment=TA_CENTER,
+            spaceAfter=0,
+        )
+
+        # Cell text — fontSize=8, leading=12 (1.5×) prevents line overlap.
+        # wordWrap='LTR' wraps at word boundaries (correct for English text).
+        # No leftIndent/rightIndent — padding is controlled via TableStyle.
+        cell_style = ParagraphStyle(
+            'Cell',
+            parent=base['Normal'],
+            fontSize=8,
+            leading=12,
+            textColor=C_SLATE_700,
+            wordWrap='LTR',
+            spaceAfter=0,
+            spaceBefore=0,
+        )
+        cell_muted_style = ParagraphStyle(
+            'CellMuted',
+            parent=cell_style,
+            textColor=C_SLATE_500,
+        )
+        cell_mono_style = ParagraphStyle(
+            'CellMono',
+            parent=cell_style,
+            fontName='Courier',
+            fontSize=7.5,
+            leading=11,
+        )
+        credit_style = ParagraphStyle(
+            'CellCredit',
+            parent=cell_style,
+            textColor=C_EMERALD,
+            fontName='Helvetica-Bold',
+            alignment=TA_RIGHT,
+        )
+        debit_style = ParagraphStyle(
+            'CellDebit',
+            parent=cell_style,
+            textColor=C_ROSE,
+            fontName='Helvetica-Bold',
+            alignment=TA_RIGHT,
+        )
+        summary_label_style = ParagraphStyle(
+            'SummaryLabel',
+            parent=base['Normal'],
+            fontSize=8,
+            leading=12,
+            textColor=C_SLATE_700,
+            fontName='Helvetica-Bold',
+            alignment=TA_RIGHT,
+        )
+        summary_value_style = ParagraphStyle(
+            'SummaryValue',
+            parent=base['Normal'],
+            fontSize=9,
+            leading=13,
+            fontName='Helvetica-Bold',
+            alignment=TA_RIGHT,
+        )
+
+        # ── Column widths — must sum to AVAIL_W (523.28 pts = 7.27 in) ────────
+        # Date | Type | Reference | Description | Method | Bank | Amount
+        # Dir. column removed; direction encoded as +/− colour on Amount.
+        COL_W = [
+            0.82 * inch,   # Date         (59.0 pts)
+            1.00 * inch,   # Type         (72.0 pts)
+            0.90 * inch,   # Reference    (64.8 pts)
+            2.10 * inch,   # Description  (151.2 pts) — widest; needs to wrap
+            0.78 * inch,   # Method       (56.2 pts)
+            1.00 * inch,   # Bank         (72.0 pts)
+            0.67 * inch,   # Amount       (48.2 pts)
+        ]
+        # Verify: sum = 7.27in exactly (within float tolerance)
+        assert abs(sum(COL_W) - AVAIL_W) < 1.0, (
+            f"Column widths {sum(COL_W):.1f}pt ≠ available {AVAIL_W:.1f}pt"
+        )
+
+        # ── Header elements ────────────────────────────────────────────────────
+        elements = []
+
+        # Optional logo
+        try:
+            logo_path = os.path.join(
+                os.path.dirname(__file__),
+                '../../../src/assets/net_khata_horizontal.png'
+            )
+            if os.path.exists(logo_path):
+                logo = RLImage(logo_path, width=1.8 * inch, height=0.45 * inch)
+                elements.append(logo)
+                elements.append(Spacer(1, 0.1 * inch))
+        except Exception:
+            pass  # logo is optional — never fail because of it
+
+        elements.append(Paragraph("Ledger Statement", title_style))
+        elements.append(Spacer(1, 3))
+
+        formatted_date = datetime.now().strftime('%B %d, %Y  •  %I:%M %p')
+        elements.append(Paragraph(f"Generated on {formatted_date}", subtitle_style))
+        elements.append(Spacer(1, 0.18 * inch))
+
+        # Thin rule under header
+        elements.append(
+            HRFlowable(width='100%', thickness=1, color=C_SLATE_200, spaceAfter=0.12 * inch)
+        )
+
+        # ── Build table data ───────────────────────────────────────────────────
+        # Header row — plain strings; styled via TableStyle FONTNAME/FONTSIZE
+        HEADERS = ['Date', 'Type', 'Reference', 'Description', 'Method', 'Bank', 'Amount (PKR)']
+
+        # Build Paragraph header cells so they also wrap if needed
+        header_cell_style = ParagraphStyle(
+            'HeaderCell',
+            parent=base['Normal'],
+            fontSize=8,
+            leading=11,
+            textColor=C_WHITE,
+            fontName='Helvetica-Bold',
+            alignment=TA_CENTER,
+            wordWrap='LTR',
+        )
+        header_row = [Paragraph(h, header_cell_style) for h in HEADERS]
+        table_data = [header_row]
+
+        n_data_rows = 0
+        for item in items:
+            try:
+                raw_date  = str(item.get('date', '') or '')[:10]
+                raw_type  = (item.get('type', '') or '').replace('_', ' ').title()
+                raw_ref   = str(item.get('reference', '') or '').strip()
+                raw_desc  = str(item.get('description', '') or '').strip() or '—'
+                raw_meth  = (item.get('method', '') or '').replace('_', ' ').title()
+                raw_bank  = str(item.get('bank_account', '') or '').strip() or '—'
+                direction = (item.get('direction', '') or '').lower()
+
+                try:
+                    amount_val = float(item.get('amount', 0) or 0)
+                    amount_int = int(round(amount_val))
+                except (ValueError, TypeError):
+                    amount_int = 0
+
+                # +/− prefix with colour — replaces the separate Dir. column
+                if direction == 'credit':
+                    amount_str = f"+PKR {amount_int:,}"
+                    amt_style  = credit_style
+                else:
+                    amount_str = f"−PKR {amount_int:,}"   # en-dash (−) for readability
+                    amt_style  = debit_style
+
+                row = [
+                    Paragraph(raw_date,  cell_muted_style),
+                    Paragraph(raw_type,  cell_style),
+                    Paragraph(raw_ref,   cell_mono_style),
+                    Paragraph(raw_desc,  cell_style),         # wraps in wide column
+                    Paragraph(raw_meth,  cell_muted_style),
+                    Paragraph(raw_bank,  cell_muted_style),   # wraps in 1.00in column
+                    Paragraph(amount_str, amt_style),
+                ]
+                table_data.append(row)
+                n_data_rows += 1
+
+            except Exception as item_err:
+                logger.warning(f"Error building PDF row: {item_err}")
+                continue
+
+        # ── Summary section rows ───────────────────────────────────────────────
+        credits_total = sum(
+            float(i.get('amount', 0) or 0)
+            for i in items if i and i.get('direction') == 'credit'
+        )
+        debits_total = sum(
+            float(i.get('amount', 0) or 0)
+            for i in items if i and i.get('direction') == 'debit'
+        )
+        net_total = credits_total - debits_total
+
+        EMPTY = Paragraph('', cell_style)
+
+        summary_rows = [
+            # label spans cols 0-5 via SPAN in TableStyle; value in col 6
+            [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
+             Paragraph('Total Credits', summary_label_style),
+             Paragraph(f"+PKR {int(credits_total):,}", ParagraphStyle('sv_c', parent=summary_value_style, textColor=C_EMERALD))],
+            [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
+             Paragraph('Total Debits', summary_label_style),
+             Paragraph(f"−PKR {int(debits_total):,}", ParagraphStyle('sv_d', parent=summary_value_style, textColor=C_ROSE))],
+            [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
+             Paragraph('Net Position', summary_label_style),
+             Paragraph(
+                 f"PKR {int(abs(net_total)):,}",
+                 ParagraphStyle('sv_n', parent=summary_value_style,
+                     textColor=C_EMERALD if net_total >= 0 else C_ROSE)
+             )],
+            [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
+             Paragraph('Transactions', summary_label_style),
+             Paragraph(str(n_data_rows), ParagraphStyle('sv_t', parent=summary_value_style, textColor=C_SLATE_700))],
+        ]
+        n_summary = len(summary_rows)
+        for sr in summary_rows:
+            table_data.append(sr)
+
+        total_rows = 1 + n_data_rows + n_summary  # header + data + summary
+
+        # ── Create table — NO rowHeights → ReportLab auto-sizes every row ─────
+        #
+        # The previous version passed rowHeights=[...] with hardcoded estimates.
+        # ReportLab treats those as exact heights: if a Paragraph is taller, the
+        # text overflows into the next row producing the visible overlap.
+        #
+        # When rowHeights is omitted, ReportLab calls each Paragraph's wrap()
+        # to determine the minimum height needed and sizes the row accordingly.
+        table = Table(
+            table_data,
+            colWidths=COL_W,
+            # rowHeights deliberately omitted — auto-sized per cell content
+            repeatRows=1,    # repeat header on each page
+            hAlign='LEFT',
+        )
+
+        # ── Table style ────────────────────────────────────────────────────────
+        first_data = 1
+        last_data  = n_data_rows       # inclusive
+        first_sum  = n_data_rows + 1   # first summary row
+        last_row   = total_rows - 1    # last summary row (inclusive)
+
+        style_cmds = [
+            # ── Header row ────────────────────────────────────────────────────
+            ('BACKGROUND',   (0, 0),            (-1, 0),            C_BLUE_700),
+            ('TEXTCOLOR',    (0, 0),            (-1, 0),            C_WHITE),
+            ('FONTNAME',     (0, 0),            (-1, 0),            'Helvetica-Bold'),
+            ('FONTSIZE',     (0, 0),            (-1, 0),            8),
+            ('ALIGN',        (0, 0),            (-1, 0),            'CENTER'),
+            ('VALIGN',       (0, 0),            (-1, 0),            'MIDDLE'),
+            ('TOPPADDING',   (0, 0),            (-1, 0),            9),
+            ('BOTTOMPADDING',(0, 0),            (-1, 0),            9),
+            ('LEFTPADDING',  (0, 0),            (-1, 0),            6),
+            ('RIGHTPADDING', (0, 0),            (-1, 0),            6),
+
+            # ── Data rows (all) ───────────────────────────────────────────────
+            # VALIGN=TOP is critical: Paragraph text starts at the top of the cell.
+            # Without this, multi-line content is centred vertically and the
+            # bottom lines appear to overlap with the next row's top padding.
+            ('VALIGN',       (0, first_data),   (-1, last_data),    'TOP'),
+            ('TOPPADDING',   (0, first_data),   (-1, last_data),    6),
+            ('BOTTOMPADDING',(0, first_data),   (-1, last_data),    6),
+            ('LEFTPADDING',  (0, first_data),   (-1, last_data),    5),
+            ('RIGHTPADDING', (0, first_data),   (-1, last_data),    5),
+            # Slightly more padding in the wide Description column
+            ('LEFTPADDING',  (3, first_data),   (3, last_data),     7),
+            ('RIGHTPADDING', (3, first_data),   (3, last_data),     7),
+
+            # ── Zebra striping — white / blue-50 alternating ──────────────────
+            # Applied per-row via ROWBACKGROUNDS
+            ('ROWBACKGROUNDS', (0, first_data), (-1, last_data),
+             [C_WHITE, C_BLUE_50]),
+
+            # ── Grid lines ────────────────────────────────────────────────────
+            # Outer border: slate-700 (strong frame)
+            ('BOX',          (0, 0),            (-1, last_data),    0.75, C_SLATE_700),
+            # Inner horizontal lines: slate-200 (subtle rows)
+            ('INNERGRID',    (0, 0),            (-1, last_data),    0.5,  C_SLATE_200),
+            # Vertical lines: slate-200
+            ('LINEAFTER',    (0, 0),            (-2, last_data),    0.5,  C_SLATE_200),
+
+            # ── Column-level alignment ────────────────────────────────────────
+            # Amount column right-aligned (Paragraph handles it via alignment)
+            ('ALIGN',        (6, first_data),   (6, last_data),     'RIGHT'),
+            ('RIGHTPADDING', (6, first_data),   (6, last_data),     8),
+
+            # ── Summary section ───────────────────────────────────────────────
+            ('BACKGROUND',   (0, first_sum),    (-1, last_row),     C_SUMMARY_BG),
+            ('TOPPADDING',   (0, first_sum),    (-1, last_row),     7),
+            ('BOTTOMPADDING',(0, first_sum),    (-1, last_row),     7),
+            ('LEFTPADDING',  (0, first_sum),    (-1, last_row),     5),
+            ('RIGHTPADDING', (0, first_sum),    (-1, last_row),     8),
+            ('VALIGN',       (0, first_sum),    (-1, last_row),     'MIDDLE'),
+            # Top border above summary block
+            ('LINEABOVE',    (0, first_sum),    (-1, first_sum),    1.5, C_BLUE_700),
+            # Right-align label (col 5) and value (col 6) in summary
+            ('ALIGN',        (5, first_sum),    (6, last_row),      'RIGHT'),
+            # Outer box for summary
+            ('BOX',          (0, first_sum),    (-1, last_row),     0.75, C_SLATE_200),
+        ]
+        table.setStyle(TableStyle(style_cmds))
+
+        elements.append(table)
+
+        # ── Footer ─────────────────────────────────────────────────────────────
+        elements.append(Spacer(1, 0.15 * inch))
+        elements.append(
+            HRFlowable(width='100%', thickness=0.5, color=C_SLATE_200, spaceAfter=4)
+        )
+        footer_style = ParagraphStyle(
+            'LedgerFooter',
+            parent=base['Normal'],
+            fontSize=7,
+            leading=9,
+            textColor=C_SLATE_400,
+            alignment=TA_LEFT,
+        )
+        elements.append(
+            Paragraph(
+                f"<i>Net Khata Ledger Export  •  Generated {timestamp}  •  "
+                f"{n_data_rows} transaction(s)</i>",
+                footer_style,
+            )
+        )
+
+        doc.build(elements)
+        file_obj.seek(0)
+
+        filename  = f"Ledger-Statement-{timestamp}.pdf"
+        mime_type = "application/pdf"
+        logger.info(f"PDF export completed: {filename} ({n_data_rows} rows)")
+        return file_obj, filename, mime_type
+
+    except Exception as pdf_err:
+        logger.error(f"Error in PDF generation: {pdf_err}", exc_info=True)
+        logger.info("Falling back to CSV export")
+        return _export_csv(items, timestamp)

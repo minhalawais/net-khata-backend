@@ -193,11 +193,15 @@ def add_ledger_entry(id):
     for field in required_fields:
         if field not in data:
             return jsonify({'error': f'{field} is required'}), 400
+
+    transaction_type = str(data.get('transaction_type', '')).strip().lower()
+    if transaction_type == 'payout':
+        return jsonify({'error': "'payout' is no longer supported. Use 'salary_payout' or 'commission_payout'."}), 400
     
     try:
         entry = employee_ledger_crud.add_ledger_entry(
             employee_id=id,
-            transaction_type=data['transaction_type'],
+            transaction_type=transaction_type,
             amount=float(data['amount']),
             description=data['description'],
             company_id=company_id,

@@ -9,6 +9,7 @@ import logging
 from datetime import datetime, timedelta
 from flask import jsonify
 from sqlalchemy import or_
+from sqlalchemy.orm import joinedload
 import re
 import uuid
 import pandas as pd
@@ -24,33 +25,79 @@ from app.services.auto_invoice_service import (
 logger = logging.getLogger(__name__)
 
 
-async def get_all_customers(company_id, user_role, employee_id):
-    if user_role == 'super_admin' or user_role == 'employee':
-        customers = Customer.query.order_by(Customer.created_at.desc()).all()
+async def get_all_customers(company_id, user_role, employee_id, page=None, page_size=None, search=None, paginate=False):
+    # Use eager loading for related entities used by list response to avoid N+1 queries.
+    query = Customer.query.options(
+        joinedload(Customer.area),
+        joinedload(Customer.isp),
+        joinedload(Customer.sub_zone),
+    ).order_by(Customer.created_at.desc())
+
+    if user_role == 'super_admin':
+        pass
     elif user_role == 'auditor':
-        customers = Customer.query.filter_by(is_active=True, company_id=company_id).order_by(Customer.created_at.desc()).all()
-    elif user_role == 'company_owner':
-        customers = Customer.query.filter_by(company_id=company_id).order_by(Customer.created_at.desc()).all()
-    elif user_role == 'employee':
-        customers = Customer.query.filter_by(company_id=company_id).order_by(Customer.created_at.desc()).all()
+        query = query.filter(Customer.company_id == company_id, Customer.is_active == True)
+    elif user_role in ['company_owner', 'manager', 'employee', 'recovery_agent', 'technician', 'customer']:
+        query = query.filter(Customer.company_id == company_id)
+    else:
+        # Safe default for unknown roles.
+        query = query.filter(Customer.company_id == company_id)
+
+    if search:
+        search_term = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                Customer.first_name.ilike(search_term),
+                Customer.last_name.ilike(search_term),
+                Customer.internet_id.ilike(search_term),
+                Customer.phone_1.ilike(search_term),
+                Customer.phone_2.ilike(search_term),
+                Customer.email.ilike(search_term),
+                Customer.cnic.ilike(search_term),
+            )
+        )
+
+    total = None
+    if paginate:
+        safe_page = max(int(page or 1), 1)
+        safe_page_size = max(min(int(page_size or 50), 200), 1)
+        total = query.count()
+        customers = query.offset((safe_page - 1) * safe_page_size).limit(safe_page_size).all()
+    else:
+        customers = query.all()
+
+    customer_ids = [customer.id for customer in customers]
+    packages_by_customer_id = {}
+    service_plans_by_id = {}
+
+    if customer_ids:
+        # Batch load packages once for all listed customers.
+        customer_packages = CustomerPackage.query.filter(
+            CustomerPackage.customer_id.in_(customer_ids),
+            CustomerPackage.is_active == True
+        ).all()
+
+        service_plan_ids = {cp.service_plan_id for cp in customer_packages if cp.service_plan_id}
+        if service_plan_ids:
+            plans = ServicePlan.query.filter(ServicePlan.id.in_(service_plan_ids)).all()
+            service_plans_by_id = {plan.id: plan for plan in plans}
+
+        for cp in customer_packages:
+            packages_by_customer_id.setdefault(cp.customer_id, []).append(cp)
 
     result = []
     for customer in customers:
-        area = Area.query.get(customer.area_id)
-        isp = ISP.query.get(customer.isp_id)
-        
-        # Get customer packages from CustomerPackage table
-        customer_packages = CustomerPackage.query.filter_by(
-            customer_id=customer.id,
-            is_active=True
-        ).all()
+        area = customer.area
+        isp = customer.isp
+
+        customer_packages = packages_by_customer_id.get(customer.id, [])
         
         # Build packages list with service plan details
         packages_list = []
         total_packages_price = 0
         package_names = []
         for cp in customer_packages:
-            service_plan = ServicePlan.query.get(cp.service_plan_id)
+            service_plan = service_plans_by_id.get(cp.service_plan_id)
             if service_plan:
                 packages_list.append({
                     'id': str(cp.id),
@@ -77,7 +124,6 @@ async def get_all_customers(company_id, user_role, employee_id):
             # Multi-package fields
             'packages': packages_list,
             'service_plan': ', '.join(package_names) if package_names else 'No Package',
-            'servicePlanPrice': total_packages_price,
             'servicePlanPrice': total_packages_price,
             'isp': isp.name if isp else 'Unassigned',
             'isp_id': str(customer.isp_id) if customer.isp_id else None,
@@ -123,7 +169,17 @@ async def get_all_customers(company_id, user_role, employee_id):
             'created_at': customer.created_at.isoformat() if customer.created_at else None,
             'updated_at': customer.updated_at.isoformat() if customer.updated_at else None,
         })
-    return result
+    if not paginate:
+        return result
+
+    total_pages = (total + safe_page_size - 1) // safe_page_size if total is not None else 1
+    return {
+        'items': result,
+        'total': total or 0,
+        'page': safe_page,
+        'page_size': safe_page_size,
+        'total_pages': total_pages,
+    }
 
 
 def format_phone_number(phone):
@@ -504,12 +560,16 @@ async def update_customer(id, data, company_id, user_role, current_user_id, ip_a
             'miscellaneous_details': customer.miscellaneous_details,
             'miscellaneous_charges': float(customer.miscellaneous_charges) if customer.miscellaneous_charges else None,
             'is_active': customer.is_active,
+            'deactivated_at': customer.deactivated_at.isoformat() if customer.deactivated_at else None,
+            'deactivated_reason': customer.deactivated_reason,
             'cnic': customer.cnic,
             'cnic_front_image': customer.cnic_front_image,
             'cnic_back_image': customer.cnic_back_image,
             'gps_coordinates': customer.gps_coordinates,
             'agreement_document': customer.agreement_document
         }
+
+        old_is_active = customer.is_active
 
         # List of fields that should NOT be updated (read-only/computed fields)
         read_only_fields = [
@@ -572,6 +632,18 @@ async def update_customer(id, data, company_id, user_role, current_user_id, ip_a
             
             else:
                 setattr(customer, key, value)
+
+        # Keep deactivation tracking consistent with active status transitions.
+        if customer.is_active != old_is_active:
+            if customer.is_active:
+                customer.deactivated_at = None
+                customer.deactivated_reason = None
+            else:
+                customer.deactivated_at = datetime.utcnow()
+                reason = data.get('deactivated_reason') or data.get('status_reason') or 'Deactivated by user action'
+                customer.deactivated_reason = str(reason)[:255]
+        elif customer.is_active is False and data.get('deactivated_reason'):
+            customer.deactivated_reason = str(data.get('deactivated_reason'))[:255]
 
         # --- SYNC CUSTOMER PACKAGES ---
         from app.crud import customer_package_crud
@@ -797,7 +869,7 @@ async def validate_customer_data(data, is_update=False, customer_id=None):
 
     return errors
 
-async def toggle_customer_status(id, company_id, user_role, current_user_id, ip_address, user_agent):
+async def toggle_customer_status(id, company_id, user_role, current_user_id, ip_address, user_agent, deactivation_reason=None):
     if user_role == 'super_admin' or user_role == 'employee':
         customer = Customer.query.get(id)
     elif user_role == 'auditor':
@@ -810,6 +882,15 @@ async def toggle_customer_status(id, company_id, user_role, current_user_id, ip_
 
     old_status = customer.is_active
     customer.is_active = not customer.is_active
+
+    if customer.is_active:
+        customer.deactivated_at = None
+        customer.deactivated_reason = None
+    else:
+        customer.deactivated_at = datetime.utcnow()
+        reason = deactivation_reason or 'Deactivated by user action'
+        customer.deactivated_reason = str(reason)[:255]
+
     db.session.commit()
 
     log_action(
@@ -818,7 +899,11 @@ async def toggle_customer_status(id, company_id, user_role, current_user_id, ip_
         'customers',
         customer.id,
         {'is_active': old_status},
-        {'is_active': customer.is_active},
+        {
+            'is_active': customer.is_active,
+            'deactivated_at': customer.deactivated_at.isoformat() if customer.deactivated_at else None,
+            'deactivated_reason': customer.deactivated_reason,
+        },
         ip_address,
         user_agent,
         company_id
