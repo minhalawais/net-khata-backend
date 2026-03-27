@@ -66,8 +66,16 @@ def invoice_to_dict(invoice):
 def generate_invoice_number():
     try:
         year = datetime.now().year
-        last_invoice = Invoice.query.order_by(Invoice.created_at.desc()).first()
-        if last_invoice and last_invoice.invoice_number.startswith(f'INV-{year}-'):
+        prefix = f'INV-{year}-'
+        
+        # FIX: Explicitly filter for ONLY this year's invoices before getting the latest
+        last_invoice = Invoice.query.filter(
+            Invoice.invoice_number.like(f'{prefix}%')
+        ).order_by(
+            Invoice.created_at.desc()
+        ).first()
+
+        if last_invoice:
             try:
                 last_number = int(last_invoice.invoice_number.split('-')[-1])
                 new_number = last_number + 1
@@ -76,7 +84,8 @@ def generate_invoice_number():
                 raise InvoiceError("Failed to generate invoice number")
         else:
             new_number = 1
-        return f'INV-{year}-{new_number:04d}'
+            
+        return f'{prefix}{new_number:04d}'
     except Exception as e:
         logger.error(f"Error generating invoice number: {str(e)}")
         raise InvoiceError("Failed to generate invoice number")
@@ -162,9 +171,28 @@ def add_invoice(data, current_user_id, user_role, ip_address, user_agent):
             invoice_data['billing_end_date'] = parsed_dates['due_date']
             invoice_data['discount_percentage'] = 0
 
-        new_invoice = Invoice(**invoice_data)
-        db.session.add(new_invoice)
-        db.session.flush()  # Get invoice ID before creating line items
+        max_retries = 3
+        new_invoice = None
+        
+        for attempt in range(max_retries):
+            try:
+                # Dynamically fetch the next number right before attempting the insert
+                invoice_data['invoice_number'] = generate_invoice_number()
+                
+                new_invoice = Invoice(**invoice_data)
+                db.session.add(new_invoice)
+                db.session.flush()  # Flushes the insert to trigger unique constraints
+                break  # If successful, break out of the retry loop
+                
+            except IntegrityError as e:
+                db.session.rollback()  # Rollback the failed transaction
+                
+                # Check if the error is specifically the invoice_number unique constraint
+                if "invoices_invoice_number_key" in str(e.orig) and attempt < max_retries - 1:
+                    logger.warning(f"Invoice number collision detected. Retrying... ({attempt + 1}/{max_retries})")
+                    continue
+                
+                raise # Re-raise if it's a different IntegrityError or we ran out of retries
         
         # Handle equipment invoice: create line items and deduct inventory
         if invoice_type == 'equipment':

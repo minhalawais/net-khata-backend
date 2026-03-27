@@ -798,16 +798,29 @@ class WhatsAppConfig(db.Model):
     """
     Stores WhatsApp API configuration and settings.
     One record per company.
+    Supports two provider modes:
+      - 'gateway': Legacy third-party send.php API (api_key + server_address)
+      - 'evolution': Self-hosted Evolution API (Baileys-based, QR pairing)
     """
     __tablename__ = 'whatsapp_config'
     
     id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     company_id = db.Column(UUID(as_uuid=True), db.ForeignKey('companies.id'), nullable=False, unique=True)
     
-    # API Configuration
-    api_key = db.Column(db.String(255), nullable=False)
-    server_address = db.Column(db.String(255), nullable=False)
+    # Provider type: 'gateway' (legacy send.php) or 'evolution' (Baileys)
+    provider_type = db.Column(db.String(20), nullable=False, default='evolution')
+    
+    # API Configuration (used by 'gateway' provider)
+    api_key = db.Column(db.String(255), nullable=True)
+    server_address = db.Column(db.String(255), nullable=True)
     instance_id = db.Column(db.String(100))  # Optional instance ID
+    
+    # Evolution API specific fields
+    instance_name = db.Column(db.String(100))        # Evolution instance name
+    instance_token = db.Column(db.String(255))        # Instance auth token
+    qr_code_base64 = db.Column(db.Text)               # Latest QR code for re-pairing
+    phone_connected = db.Column(db.Boolean, default=False)
+    phone_number = db.Column(db.String(20))           # Connected WhatsApp number
     
     # Feature toggles
     auto_send_invoices = db.Column(db.Boolean, default=True)
@@ -824,6 +837,17 @@ class WhatsAppConfig(db.Model):
     daily_quota_limit = db.Column(db.Integer, default=200)
     quota_buffer = db.Column(db.Integer, default=5)  # Safety buffer (send max 195)
     
+    # Anti-ban settings (used by 'evolution' provider)
+    min_delay_seconds = db.Column(db.Integer, default=45)     # Minimum delay between messages
+    max_delay_seconds = db.Column(db.Integer, default=120)    # Maximum delay between messages
+    send_window_start = db.Column(db.String(5), default='09:00')  # Safe sending start time
+    send_window_end = db.Column(db.String(5), default='21:00')    # Safe sending end time
+    enable_spintax = db.Column(db.Boolean, default=True)      # Enable message humanization
+    
+    # Number warm-up tracking
+    warmup_complete = db.Column(db.Boolean, default=False)
+    warmup_start_date = db.Column(db.Date)  # When number was first connected
+    
     # Default message settings
     default_invoice_priority = db.Column(db.Integer, default=10)
     default_alert_priority = db.Column(db.Integer, default=0)
@@ -831,7 +855,7 @@ class WhatsAppConfig(db.Model):
     
     # Connection status
     last_connection_test = db.Column(db.TIMESTAMP(timezone=True))
-    connection_status = db.Column(db.String(20), default='untested')  # untested, success, failed
+    connection_status = db.Column(db.String(20), default='untested')  # untested, success, failed, connected
     
     # Timestamps
     created_at = db.Column(db.TIMESTAMP(timezone=True), server_default=func.current_timestamp())
@@ -839,6 +863,28 @@ class WhatsAppConfig(db.Model):
     
     # Relationship
     company = relationship('Company', backref=db.backref('whatsapp_config', uselist=False, lazy=True))
+    
+    @property
+    def current_daily_limit(self):
+        """
+        Calculate safe daily sending limit based on warm-up phase.
+        New numbers ramp up gradually: 20 → 50 → 100 → full limit over 4 weeks.
+        """
+        if self.warmup_complete:
+            return self.daily_quota_limit
+        if not self.warmup_start_date:
+            return 20  # Ultra-safe default for unconfigured
+        from datetime import date as date_type
+        days_active = (date_type.today() - self.warmup_start_date).days
+        if days_active < 7:
+            return 20
+        elif days_active < 14:
+            return 50
+        elif days_active < 21:
+            return 100
+        else:
+            # Auto-mark warm-up as complete after 4 weeks
+            return self.daily_quota_limit
     
     def __repr__(self):
         return f'<WhatsAppConfig {self.company_id}>'

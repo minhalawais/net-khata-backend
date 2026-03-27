@@ -37,6 +37,22 @@ def add_isp_payment(data, user_role, current_user_id, ip_address, user_agent):
         except ValueError:
             raise ValueError("Invalid payment date or time format")
 
+        # FIX: Safely handle payment_proof file upload or empty dicts
+        payment_proof_path = None
+        payment_proof_data = data.get('payment_proof')
+        
+        if payment_proof_data:
+            # If it's a valid Flask FileStorage object
+            if hasattr(payment_proof_data, 'filename') and payment_proof_data.filename:
+                filename = secure_filename(payment_proof_data.filename)
+                # Ensure UPLOAD_FOLDER is defined/imported at the top of your file
+                file_path = os.path.join(UPLOAD_FOLDER, filename)
+                payment_proof_data.save(file_path)
+                payment_proof_path = file_path
+            # If it's passed as a direct string (e.g., pre-uploaded path)
+            elif isinstance(payment_proof_data, str) and payment_proof_data.strip():
+                payment_proof_path = payment_proof_data
+
         # Create new payment
         new_payment = ISPPayment(
             company_id=uuid.UUID(data['company_id']),
@@ -46,14 +62,14 @@ def add_isp_payment(data, user_role, current_user_id, ip_address, user_agent):
             reference_number=data.get('reference_number'),
             description=data.get('description', ''),
             amount=float(data['amount']),
-            payment_date=payment_datetime,  # Use combined datetime
+            payment_date=payment_datetime,
             billing_period=data['billing_period'],
             bandwidth_usage_gb=float(data['bandwidth_usage_gb']) if data.get('bandwidth_usage_gb') else None,
             payment_method=data['payment_method'],
             transaction_id=data.get('transaction_id'),
             status=data.get('status', 'completed'),
             processed_by=uuid.UUID(data['processed_by']),
-            payment_proof=data.get('payment_proof'),
+            payment_proof=payment_proof_path,  # Use the safely parsed path instead of raw dict
             is_active=True
         )
 
@@ -62,6 +78,8 @@ def add_isp_payment(data, user_role, current_user_id, ip_address, user_agent):
         # Update bank account balance (Debit)
         if new_payment.payment_method == 'bank_transfer' and new_payment.bank_account_id:
             try:
+                # Flush to ensure we don't trigger the autoflush bug during balance update
+                db.session.flush() 
                 from app.crud.bank_account_crud import update_account_balance
                 # ISP Payment is a debit (money leaving)
                 update_account_balance(new_payment.bank_account_id, -new_payment.amount, 'debit')

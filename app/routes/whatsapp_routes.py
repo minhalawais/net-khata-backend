@@ -14,7 +14,8 @@ from app.models import Customer, Invoice
 from app.services.whatsapp_queue_service import WhatsAppQueueService
 from app.services.whatsapp_rate_limiter import WhatsAppRateLimiter
 from app.services.whatsapp_api_client import WhatsAppAPIClient
-from datetime import datetime
+from app.services.evolution_api_client import EvolutionAPIClient
+from datetime import datetime, date
 import logging
 
 logger = logging.getLogger(__name__)
@@ -400,6 +401,7 @@ def get_config():
         
         return jsonify({
             'configured': True,
+            'provider_type': config.provider_type or 'evolution',
             'api_key': config.api_key[:10] + '...' if config.api_key else '',  # Mask API key
             'server_address': config.server_address,
             'auto_send_invoices': config.auto_send_invoices,
@@ -410,7 +412,21 @@ def get_config():
             'daily_quota_limit': config.daily_quota_limit,
             'quota_buffer': config.quota_buffer,
             'connection_status': config.connection_status,
-            'last_connection_test': config.last_connection_test.isoformat() if config.last_connection_test else None
+            'last_connection_test': config.last_connection_test.isoformat() if config.last_connection_test else None,
+            # Evolution API fields
+            'instance_name': config.instance_name,
+            'phone_connected': config.phone_connected or False,
+            'phone_number': config.phone_number,
+            # Anti-ban settings
+            'min_delay_seconds': config.min_delay_seconds or 45,
+            'max_delay_seconds': config.max_delay_seconds or 120,
+            'send_window_start': config.send_window_start or '09:00',
+            'send_window_end': config.send_window_end or '21:00',
+            'enable_spintax': config.enable_spintax if config.enable_spintax is not None else True,
+            # Warm-up status
+            'warmup_complete': config.warmup_complete or False,
+            'warmup_start_date': config.warmup_start_date.isoformat() if config.warmup_start_date else None,
+            'current_daily_limit': config.current_daily_limit,
         }), 200
         
     except Exception as e:
@@ -434,6 +450,7 @@ def update_config():
             # Create new config
             config = WhatsAppConfig(
                 company_id=company_id,
+                provider_type=data.get('provider_type', 'evolution'),
                 api_key=data.get('api_key'),
                 server_address=data.get('server_address'),
                 auto_send_invoices=data.get('auto_send_invoices', True),
@@ -442,11 +459,19 @@ def update_config():
                 deadline_check_time=data.get('deadline_check_time', '09:00'),
                 deadline_alert_days_before=data.get('deadline_alert_days_before', 2),
                 daily_quota_limit=data.get('daily_quota_limit', 200),
-                quota_buffer=data.get('quota_buffer', 5)
+                quota_buffer=data.get('quota_buffer', 5),
+                # Anti-ban defaults
+                min_delay_seconds=data.get('min_delay_seconds', 45),
+                max_delay_seconds=data.get('max_delay_seconds', 120),
+                send_window_start=data.get('send_window_start', '09:00'),
+                send_window_end=data.get('send_window_end', '21:00'),
+                enable_spintax=data.get('enable_spintax', True),
             )
             db.session.add(config)
         else:
             # Update existing config
+            if 'provider_type' in data:
+                config.provider_type = data['provider_type']
             if 'api_key' in data:
                 config.api_key = data['api_key']
             if 'server_address' in data:
@@ -465,6 +490,17 @@ def update_config():
                 config.daily_quota_limit = data['daily_quota_limit']
             if 'quota_buffer' in data:
                 config.quota_buffer = data['quota_buffer']
+            # Anti-ban settings
+            if 'min_delay_seconds' in data:
+                config.min_delay_seconds = data['min_delay_seconds']
+            if 'max_delay_seconds' in data:
+                config.max_delay_seconds = data['max_delay_seconds']
+            if 'send_window_start' in data:
+                config.send_window_start = data['send_window_start']
+            if 'send_window_end' in data:
+                config.send_window_end = data['send_window_end']
+            if 'enable_spintax' in data:
+                config.enable_spintax = data['enable_spintax']
         
         db.session.commit()
         
@@ -505,3 +541,148 @@ def test_connection():
             'success': False,
             'error': str(e)
         }), 500
+
+
+# ============================================================================
+# EVOLUTION API INSTANCE MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@whatsapp_bp.route('/instance/create', methods=['POST'])
+@jwt_required()
+def create_evolution_instance():
+    """Create a new Evolution API instance and get QR code for pairing"""
+    try:
+        claims = get_jwt()
+        company_id = claims['company_id']
+        
+        # Ensure config exists
+        config = WhatsAppConfig.query.filter_by(company_id=company_id).first()
+        if not config:
+            config = WhatsAppConfig(
+                company_id=company_id,
+                provider_type='evolution'
+            )
+            db.session.add(config)
+            db.session.commit()
+        
+        # Create instance via Evolution API
+        evo_client = EvolutionAPIClient()
+        result = evo_client.create_instance(company_id)
+        
+        return jsonify(result), 201 if result.get('success') else 500
+        
+    except Exception as e:
+        logger.error(f"Error creating Evolution instance: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@whatsapp_bp.route('/instance/qr', methods=['GET'])
+@jwt_required()
+def get_instance_qr():
+    """Get the QR code for WhatsApp pairing"""
+    try:
+        claims = get_jwt()
+        company_id = claims['company_id']
+        
+        config = WhatsAppConfig.query.filter_by(company_id=company_id).first()
+        if not config or not config.instance_name:
+            return jsonify({
+                'success': False,
+                'error': 'No instance found. Please create one first.'
+            }), 404
+        
+        evo_client = EvolutionAPIClient()
+        result = evo_client.get_qr_code(config.instance_name)
+        
+        # Cache QR in database for frontend polling
+        if result.get('success') and result.get('qr_code_base64'):
+            config.qr_code_base64 = result['qr_code_base64']
+            db.session.commit()
+        
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching QR code: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@whatsapp_bp.route('/instance/status', methods=['GET'])
+@jwt_required()
+def get_instance_status():
+    """Check WhatsApp connection status"""
+    try:
+        claims = get_jwt()
+        company_id = claims['company_id']
+        
+        config = WhatsAppConfig.query.filter_by(company_id=company_id).first()
+        if not config or not config.instance_name:
+            return jsonify({
+                'success': True,
+                'connected': False,
+                'state': 'no_instance',
+                'message': 'No instance configured'
+            }), 200
+        
+        evo_client = EvolutionAPIClient()
+        result = evo_client.update_connection_status(company_id, config.instance_name)
+        
+        # Add warm-up info to response
+        result['warmup_complete'] = config.warmup_complete or False
+        result['warmup_start_date'] = config.warmup_start_date.isoformat() if config.warmup_start_date else None
+        result['current_daily_limit'] = config.current_daily_limit
+        result['phone_number'] = config.phone_number
+        
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"Error checking instance status: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@whatsapp_bp.route('/instance/disconnect', methods=['POST'])
+@jwt_required()
+def disconnect_instance():
+    """Disconnect (logout) the WhatsApp session"""
+    try:
+        claims = get_jwt()
+        company_id = claims['company_id']
+        
+        config = WhatsAppConfig.query.filter_by(company_id=company_id).first()
+        if not config or not config.instance_name:
+            return jsonify({'success': False, 'error': 'No instance found'}), 404
+        
+        evo_client = EvolutionAPIClient()
+        result = evo_client.disconnect(config.instance_name)
+        
+        if result.get('success'):
+            config.phone_connected = False
+            config.connection_status = 'disconnected'
+            db.session.commit()
+        
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"Error disconnecting instance: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@whatsapp_bp.route('/instance/restart', methods=['POST'])
+@jwt_required()
+def restart_instance():
+    """Restart the Evolution API instance"""
+    try:
+        claims = get_jwt()
+        company_id = claims['company_id']
+        
+        config = WhatsAppConfig.query.filter_by(company_id=company_id).first()
+        if not config or not config.instance_name:
+            return jsonify({'success': False, 'error': 'No instance found'}), 404
+        
+        evo_client = EvolutionAPIClient()
+        result = evo_client.restart_instance(config.instance_name)
+        
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"Error restarting instance: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500

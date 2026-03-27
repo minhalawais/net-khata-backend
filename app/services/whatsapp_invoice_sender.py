@@ -47,14 +47,20 @@ Thank you for your business!
         """
         try:
             config = WhatsAppConfig.query.filter_by(company_id=company_id).first()
-            # Check if config exists, has required fields, and auto_send_invoices is enabled
             if not config:
                 return False
             
-            # Verify required configuration fields are set
-            if not config.api_key or not config.server_address:
-                logger.warning(f"WhatsApp not properly configured for company {company_id}")
-                return False
+            # Check configuration based on provider type
+            if config.provider_type == 'evolution':
+                # Evolution mode: check if phone is connected
+                if not config.phone_connected or not config.instance_name:
+                    logger.warning(f"Evolution API not connected for company {company_id}")
+                    return False
+            else:
+                # Legacy gateway mode: check api_key and server_address
+                if not config.api_key or not config.server_address:
+                    logger.warning(f"WhatsApp not properly configured for company {company_id}")
+                    return False
             
             return config.auto_send_invoices
         except Exception as e:
