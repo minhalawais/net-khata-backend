@@ -8,6 +8,36 @@ from datetime import timedelta
 from flask_mail import Mail
 
 import os
+import pathlib
+
+
+# Load environment variables from common .env files if present.
+# This ensures running via `uvicorn` or `python -m` picks up keys in `api/.env`
+def _load_env_files():
+    base = pathlib.Path(__file__).resolve().parent    # .../api/app
+    api_root = base.parent                              # .../api
+    project_root = api_root.parent                      # repository root
+
+    for p in (api_root / '.env', project_root / '.env'):
+        try:
+            if not p.exists():
+                continue
+            with p.open() as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if '=' not in line:
+                        continue
+                    k, v = line.split('=', 1)
+                    v = v.strip().strip('"').strip("'")
+                    os.environ.setdefault(k.strip(), v)
+        except Exception:
+            # Non-fatal — fall back to existing environment variables
+            continue
+
+
+_load_env_files()
 
 db = SQLAlchemy()
 bcrypt = Bcrypt()
@@ -42,7 +72,6 @@ def create_app():
         from .routes import main
         from .auth import auth
         from . import models
-        from . import whatsapp_models  # Import WhatsApp models
         app.register_blueprint(main)
         app.register_blueprint(auth, url_prefix='/auth')
         db.create_all()

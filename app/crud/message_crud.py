@@ -1,5 +1,6 @@
 from app import db
-from app.models import Message, User, Customer
+from app.models import Message, User, Customer, Company
+from app.services.whatsapp_queue_service import WhatsAppQueueService
 from app.utils.logging_utils import log_action
 import uuid
 from sqlalchemy.exc import SQLAlchemyError
@@ -42,30 +43,92 @@ def get_recipient_name(recipient_id):
 
 def add_message(data, current_user_id, ip_address, user_agent):
     try:
-        new_message = Message(
-            company_id=uuid.UUID(data['company_id']),
-            sender_id=uuid.UUID(data['sender_id']),
-            recipient_id=uuid.UUID(data['recipient_id']),
-            subject=data['subject'],
-            content=data['content'],
-            is_active=True
-        )
-        db.session.add(new_message)
+        # Support single recipient (recipient_id) or multiple recipients (recipient_ids)
+        company_uuid = uuid.UUID(data['company_id'])
+        sender_uuid = uuid.UUID(data['sender_id'])
+
+        recipient_field = data.get('recipient_ids') or data.get('recipient_id')
+        if not recipient_field:
+            raise KeyError('recipient_id')
+
+        # Normalize to list of uuid strings
+        if isinstance(recipient_field, str):
+            # allow comma-separated strings from the frontend
+            recipients = [r.strip() for r in recipient_field.split(',') if r.strip()]
+        elif isinstance(recipient_field, list):
+            recipients = recipient_field
+        else:
+            recipients = [str(recipient_field)]
+
+        created_messages = []
+        for rid in recipients:
+            r_uuid = uuid.UUID(rid)
+            msg = Message(
+                company_id=company_uuid,
+                sender_id=sender_uuid,
+                recipient_id=r_uuid,
+                subject=data.get('subject'),
+                content=data.get('content'),
+                is_active=True
+            )
+            db.session.add(msg)
+            created_messages.append(msg)
+
         db.session.commit()
 
-        log_action(
-            current_user_id,
-            'CREATE',
-            'messages',
-            new_message.id,
-            None,
-            data,
-                        ip_address,
-            user_agent,
-            company_id
-)
+        # Log creation for each message
+        for msg in created_messages:
+            log_action(
+                current_user_id,
+                'CREATE',
+                'messages',
+                msg.id,
+                None,
+                {
+                    'company_id': str(company_uuid),
+                    'sender_id': str(sender_uuid),
+                    'recipient_id': str(msg.recipient_id),
+                    'subject': msg.subject,
+                    'content': msg.content,
+                },
+                ip_address,
+                user_agent,
+                str(company_uuid)
+            )
 
-        return new_message
+        # Enqueue messages to WhatsApp queue if recipient is a customer
+        for msg in created_messages:
+            try:
+                customer = Customer.query.get(msg.recipient_id)
+                if customer and customer.phone_1:
+                    try:
+                        # Fetch company and replace {{company_name}} if present
+                        company = Company.query.get(company_uuid)
+                        message_content = msg.content
+                        
+                        if company and '{{company_name}}' in message_content:
+                            message_content = message_content.replace('{{company_name}}', company.name)
+                        
+                        WhatsAppQueueService.enqueue_message(
+                            company_id=str(company_uuid),
+                            customer_id=str(customer.id),
+                            mobile=customer.phone_1,
+                            message_content=message_content,
+                            message_type='custom',
+                            priority=60
+                        )
+                        logger.info(f"Enqueued WhatsApp message for customer {customer.id} (message {msg.id})")
+                    except Exception as e:
+                        logger.warning(f"Failed to enqueue WhatsApp message for customer {customer.id}: {e}")
+                else:
+                    logger.info(f"Recipient {msg.recipient_id} is not a customer or has no phone number; skipping enqueue")
+            except Exception as e:
+                logger.error(f"Error while attempting to enqueue message {msg.id}: {e}")
+
+        # Return single Message object if only one created, else list
+        if len(created_messages) == 1:
+            return created_messages[0]
+        return created_messages
     except SQLAlchemyError as e:
         logger.error(f"Database error: {str(e)}")
         db.session.rollback()
@@ -77,7 +140,7 @@ def add_message(data, current_user_id, ip_address, user_agent):
 def update_message(id, data, company_id, user_role, current_user_id, ip_address, user_agent):
     try:
         if user_role == 'super_admin':
-            message = Message.query.get(id)
+            message = db.session.get(Message, id)
         elif user_role == 'auditor':
             message = Message.query.filter_by(id=id, is_active=True, company_id=company_id).first()
         else:  # company_owner

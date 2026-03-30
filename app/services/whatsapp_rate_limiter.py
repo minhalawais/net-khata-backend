@@ -1,14 +1,17 @@
 """
 WhatsApp Rate Limiter Service
-Manages daily message quota to enforce 200 messages/day limit.
+Manages daily message quota with warm-up schedule: Week 1=40, Week 2=60, Week 3+=100, Full=200 msgs/day.
+All date/time calculations use Pakistan timezone (Asia/Karachi).
 """
 
 from app import db
 from app.models import WhatsAppDailyQuota, WhatsAppConfig
 from datetime import datetime, date
 import logging
+import pytz
 
 logger = logging.getLogger(__name__)
+PAK_TZ = pytz.timezone('Asia/Karachi')
 
 
 class WhatsAppRateLimiter:
@@ -18,6 +21,7 @@ class WhatsAppRateLimiter:
     def get_or_create_today_quota(company_id: str) -> WhatsAppDailyQuota:
         """
         Get today's quota record or create if doesn't exist.
+        Today is calculated using Pakistan timezone (Asia/Karachi).
         
         Args:
             company_id: Company UUID
@@ -26,7 +30,8 @@ class WhatsAppRateLimiter:
             WhatsAppDailyQuota: Today's quota object
         """
         try:
-            today = date.today()
+            # Get today's date in Pakistan timezone
+            today = datetime.now(PAK_TZ).date()
             
             quota = WhatsAppDailyQuota.query.filter(
                 WhatsAppDailyQuota.company_id == company_id,
@@ -44,11 +49,11 @@ class WhatsAppRateLimiter:
                     date=today,
                     messages_sent=0,
                     quota_limit=quota_limit,
-                    last_reset_at=datetime.now()
+                    last_reset_at=datetime.now(PAK_TZ)
                 )
                 db.session.add(quota)
                 db.session.commit()
-                logger.info(f"Created new quota record for {today} with limit {quota_limit}")
+                logger.info(f"Created new quota record for {today} (PKT) with limit {quota_limit}")
             
             return quota
             
@@ -70,15 +75,16 @@ class WhatsAppRateLimiter:
         """
         try:
             quota = WhatsAppRateLimiter.get_or_create_today_quota(company_id)
-            
-            # Get buffer setting from config
+
+            # Get buffer and current limit from config (do NOT rely on stored quota_limit)
             config = WhatsAppConfig.query.filter_by(company_id=company_id).first()
             buffer = config.quota_buffer if config else 5
-            
+            limit = config.daily_quota_limit if config else quota.quota_limit
+
             # Calculate remaining with buffer
-            effective_limit = quota.quota_limit - buffer
+            effective_limit = limit - buffer
             remaining = max(0, effective_limit - quota.messages_sent)
-            
+
             logger.info(f"Remaining quota: {remaining} (sent: {quota.messages_sent}/{effective_limit})")
             return remaining
             

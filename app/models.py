@@ -5,6 +5,8 @@ from sqlalchemy.dialects.postgresql import UUID, ENUM
 from app import db
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from datetime import datetime
+import pytz
 
 user_role = ENUM('super_admin', 'company_owner', 'manager', 'employee', 'auditor', 'customer', 'recovery_agent', 'technician', name='user_role')
 complaint_status = ENUM('open', 'in_progress', 'resolved', 'closed', name='complaint_status')
@@ -16,9 +18,8 @@ payment_type = ENUM(
     'upgrade', 'reconnection', 'add_on', 'refund', 'deposit',
     'maintenance', name='payment_type'
 )
-payment_method = ENUM('cash', 'online', 'bank_transfer', 'credit_card', name='payment_method')
 isp_payment_type = ENUM('monthly_subscription', 'bandwidth_usage', 'infrastructure', 'other', name='isp_payment_type')
-whatsapp_message_status = ENUM('pending', 'sent', 'failed', 'failed_permanent', name='whatsapp_message_status')
+whatsapp_message_status = ENUM('pending', 'sent', 'delivered', 'read', 'failed', 'failed_permanent', name='whatsapp_message_status')
 whatsapp_message_type = ENUM('invoice', 'deadline_alert', 'custom', 'promotional', name='whatsapp_message_type')
 whatsapp_media_type = ENUM('text', 'image', 'document', name='whatsapp_media_type')
 
@@ -738,7 +739,7 @@ class WhatsAppDailyQuota(db.Model):
     company_id = db.Column(UUID(as_uuid=True), db.ForeignKey('companies.id'), nullable=False)
     
     # Quota tracking
-    date = db.Column(db.Date, nullable=False, unique=True)  # Date for this quota
+    date = db.Column(db.Date, nullable=False)  # Date for this quota
     messages_sent = db.Column(db.Integer, default=0)
     quota_limit = db.Column(db.Integer, default=200)  # Configurable limit
     
@@ -752,6 +753,7 @@ class WhatsAppDailyQuota(db.Model):
     
     __table_args__ = (
         db.Index('idx_whatsapp_quota_date', 'date'),
+        db.UniqueConstraint('company_id', 'date', name='uq_whatsapp_quota_company_date'),
     )
     
     def __repr__(self):
@@ -829,7 +831,8 @@ class WhatsAppConfig(db.Model):
     # Scheduler settings (stored as time in HH:MM format)
     message_send_time = db.Column(db.String(5), default='09:00')  # Time to send queued messages
     deadline_check_time = db.Column(db.String(5), default='09:00')  # Time to check deadline alerts
-    
+    # NOTE: `instance_token` is declared above once. Do NOT duplicate here.
+
     # Alert settings
     deadline_alert_days_before = db.Column(db.Integer, default=2)  # Alert X days before due date
     
@@ -868,22 +871,26 @@ class WhatsAppConfig(db.Model):
     def current_daily_limit(self):
         """
         Calculate safe daily sending limit based on warm-up phase.
-        New numbers ramp up gradually: 20 → 50 → 100 → full limit over 4 weeks.
+        Weekly escalation: Week 1 = 40 → Week 2 = 60 → Week 3+ = 100 → Full limit = 200
+        Uses Pakistan timezone (Asia/Karachi) for date calculations.
         """
         if self.warmup_complete:
             return self.daily_quota_limit
         if not self.warmup_start_date:
-            return 20  # Ultra-safe default for unconfigured
+            return 40  # Default for unconfigured (Week 1 limit)
         from datetime import date as date_type
-        days_active = (date_type.today() - self.warmup_start_date).days
+        import pytz
+        pkt_tz = pytz.timezone('Asia/Karachi')
+        today_pkt = datetime.now(pkt_tz).date()
+        days_active = (today_pkt - self.warmup_start_date).days
         if days_active < 7:
-            return 20
+            return 40  # Week 1: 40 messages
         elif days_active < 14:
-            return 50
+            return 60  # Week 2: 60 messages
         elif days_active < 21:
-            return 100
+            return 100  # Week 3: 100 messages
         else:
-            # Auto-mark warm-up as complete after 4 weeks
+            # Week 4+: Full limit (200) - auto-mark warm-up as complete
             return self.daily_quota_limit
     
     def __repr__(self):

@@ -1,0 +1,36 @@
+﻿
+=== SPINTAX ENGINE TESTS ===
+  PASS: Basic spintax resolves
+  PASS: Multiple groups resolved
+  PASS: Plain text passthrough
+  PASS: Empty string handled
+  PASS: 100 runs = 36 unique (need 10+)
+  PASS: Validator: 3x2 = 6 combos
+  PASS: Validator: is_valid=True
+  PASS: Template 'invoice' exists (562 chars)
+  PASS: Template 'reminder' exists (522 chars)
+  PASS: Template 'deadline_alert' exists (612 chars)
+
+=== WARM-UP CALCULATOR TESTS ===
+  PASS: Day 1 = 20
+  PASS: Day 3 = 20
+  PASS: Day 8 = 50
+  PASS: Day 15 = 100
+  PASS: Day 22 = 200 (full)
+  PASS: Warmup complete = 200
+  PASS: No start date = 20
+
+=== SEND WINDOW TESTS ===
+  PASS: 2PM in 9AM-9PM window
+  PASS: 7AM outside 9AM-9PM
+  PASS: 10PM outside 9AM-9PM
+  PASS: 9AM exactly in window
+
+=== DISPATCHER DELAY TESTS ===
+  PASS: All 1000 delays in 45-120 range
+  PASS: Unique delays: 76 (need 20+)
+  PASS: Custom 60-180 range works
+
+========================================
+  RESULTS: 24 passed, 0 failed out of 24
+========================================

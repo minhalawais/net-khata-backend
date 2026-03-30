@@ -16,10 +16,13 @@
 
 from datetime import datetime, timedelta, date
 from calendar import monthrange
+import pytz
 import logging
 import uuid
 
 logger = logging.getLogger(__name__)
+
+PAK_TZ = pytz.timezone('Asia/Karachi')
 
 
 def get_next_month_dates(reference_date=None):
@@ -30,7 +33,7 @@ def get_next_month_dates(reference_date=None):
         tuple: (billing_start_date, billing_end_date, target_month, target_year)
     """
     if reference_date is None:
-        reference_date = datetime.now().date()
+        reference_date = datetime.now(PAK_TZ).date()
     
     # Calculate next month
     if reference_date.month == 12:
@@ -204,7 +207,7 @@ def generate_next_month_invoices(app=None):
         from app.models import Customer, Invoice, InvoiceLineItem, CustomerPackage
         from app.crud.invoice_crud import generate_invoice_number
         
-        today = datetime.now().date()
+        today = datetime.now(PAK_TZ).date()
         current_month_start = date(today.year, today.month, 1)
         
         # Get next month billing period
@@ -258,6 +261,12 @@ def generate_next_month_invoices(app=None):
                     
                     if invoice:
                         generated_count += 1
+                        # Auto-send invoice notification via WhatsApp if enabled
+                        try:
+                            from app.services.whatsapp_invoice_sender import WhatsAppInvoiceSender
+                            WhatsAppInvoiceSender.send_invoice_notification(invoice, str(customer.company_id))
+                        except Exception as e:
+                            logger.error(f"Failed to enqueue WhatsApp notification for invoice {invoice.id}: {e}")
                     else:
                         error_count += 1
                         
@@ -296,7 +305,7 @@ def generate_invoice_for_new_customer(customer_id, app=None):
             logger.warning(f"Customer {customer_id} is not active")
             return None
         
-        today = datetime.now().date()
+        today = datetime.now(PAK_TZ).date()
         billing_start_date, billing_end_date, target_month, target_year = get_next_month_dates(today)
         
         # Check if invoice already exists
@@ -337,4 +346,4 @@ def should_generate_invoice_on_creation():
     Check if invoice should be generated immediately on customer creation.
     Returns True if today >= 25th of the month.
     """
-    return datetime.now().day >= 25
+    return datetime.now(PAK_TZ).day >= 25

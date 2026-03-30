@@ -30,8 +30,12 @@ def add_new_message():
     data['company_id'] = company_id
     data['sender_id'] = current_user_id
     try:
-        new_message = message_crud.add_message(data, current_user_id, ip_address, user_agent)
-        return jsonify({'message': 'Message sent successfully', 'id': str(new_message.id)}), 201
+        result = message_crud.add_message(data, current_user_id, ip_address, user_agent)
+        # If multiple messages were created, return list of ids
+        if isinstance(result, list):
+            ids = [str(m.id) for m in result]
+            return jsonify({'message': 'Messages sent successfully', 'ids': ids}), 201
+        return jsonify({'message': 'Message sent successfully', 'id': str(result.id)}), 201
     except Exception as e:
         return jsonify({'error': 'Failed to send message', 'message': str(e)}), 400
 

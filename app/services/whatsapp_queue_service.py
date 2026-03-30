@@ -44,7 +44,7 @@ class WhatsAppQueueService:
         media_type: str = 'text',
         media_url: str = None,
         media_caption: str = None,
-        priority: int = 60,
+        priority: int = None,
         related_invoice_id: str = None,
         scheduled_date: datetime = None
     ) -> WhatsAppMessageQueue:
@@ -76,6 +76,11 @@ class WhatsAppQueueService:
                 raise ValueError(f"Invalid mobile number format: {mobile}")
             
             # Create message
+            # If priority not supplied, use company's default from config
+            if priority is None:
+                cfg = WhatsAppConfig.query.filter_by(company_id=company_id).first()
+                priority = cfg.default_custom_priority if cfg else 20
+
             message = WhatsAppMessageQueue(
                 company_id=company_id,
                 customer_id=customer_id,
@@ -108,7 +113,7 @@ class WhatsAppQueueService:
         customer_ids: list,
         message_content: str,
         message_type: str = 'custom',
-        priority: int = 60,
+        priority: int = None,
         media_type: str = 'text',
         media_url: str = None,
         media_caption: str = None
@@ -154,6 +159,13 @@ class WhatsAppQueueService:
                     logger.warning(f"Invalid phone number for customer {customer.id}: {str(e)}, skipping")
                     continue
                 
+                # determine priority from config when not provided
+                if priority is None:
+                    cfg = WhatsAppConfig.query.filter_by(company_id=company_id).first()
+                    p = cfg.default_custom_priority if cfg else 20
+                else:
+                    p = priority
+
                 message = WhatsAppMessageQueue(
                     company_id=company_id,
                     customer_id=customer.id,
@@ -163,7 +175,7 @@ class WhatsAppQueueService:
                     media_type=media_type,
                     media_url=media_url,
                     media_caption=media_caption,
-                    priority=priority,
+                    priority=p,
                     status='pending'
                 )
                 
@@ -234,6 +246,12 @@ class WhatsAppQueueService:
                     logger.warning(f"Invalid phone number for customer {customer_id}: {str(e)}, skipping")
                     continue
                 
+                # Determine priority: message-specific or company default
+                provided_priority = msg_data.get('priority')
+                if provided_priority is None:
+                    cfg = WhatsAppConfig.query.filter_by(company_id=company_id).first()
+                    provided_priority = cfg.default_custom_priority if cfg else 20
+
                 message = WhatsAppMessageQueue(
                     company_id=company_id,
                     customer_id=customer.id,
@@ -243,7 +261,7 @@ class WhatsAppQueueService:
                     media_type=msg_data.get('media_type', 'text'),
                     media_url=msg_data.get('media_url'),
                     media_caption=msg_data.get('media_caption'),
-                    priority=msg_data.get('priority', 60),
+                    priority=provided_priority,
                     status='pending'
                 )
                 
@@ -421,9 +439,17 @@ class WhatsAppQueueService:
         message = message.replace('{{customer_name}}', f"{customer.first_name} {customer.last_name}")
         message = message.replace('{{first_name}}', customer.first_name)
         
-        # Service plan
-        if customer.service_plan:
-            message = message.replace('{{plan_name}}', customer.service_plan.name)
+        # Service plan: use first active CustomerPackage's service plan if available
+        try:
+            first_pkg = None
+            if hasattr(customer, 'packages'):
+                # `packages` is a relationship; filter for active
+                first_pkg = customer.packages.filter_by(is_active=True).first()
+            if first_pkg and getattr(first_pkg, 'service_plan', None):
+                message = message.replace('{{plan_name}}', first_pkg.service_plan.name)
+        except Exception:
+            # Fallback: remove placeholder if not resolvable
+            message = message.replace('{{plan_name}}', '')
         
         # Invoice placeholders
         if invoice:

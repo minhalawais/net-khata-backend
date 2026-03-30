@@ -3,8 +3,9 @@ WhatsApp Invoice Sender Service
 Automatically sends invoice notifications via WhatsApp when invoices are generated.
 """
 
-from app.models import WhatsAppConfig, WhatsAppTemplate, Invoice, Customer
+from app.models import WhatsAppConfig, WhatsAppTemplate, Invoice, Customer, Company
 from app.services.whatsapp_queue_service import WhatsAppQueueService
+from app.services.spintax_engine import get_default_template
 from app.utils.phone_formatter import format_phone_number
 from app import db
 import logging
@@ -15,24 +16,6 @@ logger = logging.getLogger(__name__)
 
 class WhatsAppInvoiceSender:
     """Service for auto-sending invoice notifications via WhatsApp"""
-    
-    DEFAULT_INVOICE_TEMPLATE = """
-🧾 *Invoice Generated*
-
-Hello {{customer_name}},
-
-Your invoice *{{invoice_number}}* has been generated.
-
-*Amount:* Rs. {{amount}}
-*Due Date:* {{due_date}}
-*Billing Period:* {{billing_start_date}} to {{billing_end_date}}
-
-📄 View your invoice: {{invoice_link}}
-
-Please make payment before the due date.
-
-Thank you for your business!
-    """.strip()
     
     @staticmethod
     def is_auto_send_enabled(company_id: str) -> bool:
@@ -70,7 +53,7 @@ Thank you for your business!
     @staticmethod
     def get_invoice_template(company_id: str) -> str:
         """
-        Get invoice template for company or return default
+        Get invoice template for company or return default spintax template
         
         Args:
             company_id: Company UUID string
@@ -79,7 +62,7 @@ Thank you for your business!
             str: Template text
         """
         try:
-            template = WhatsAppTemplate. query.filter_by(
+            template = WhatsAppTemplate.query.filter_by(
                 company_id=company_id,
                 category='invoice',
                 is_active=True
@@ -90,7 +73,8 @@ Thank you for your business!
         except Exception as e:
             logger.warning(f"Error fetching invoice template: {str(e)}")
         
-        return WhatsAppInvoiceSender.DEFAULT_INVOICE_TEMPLATE
+        # Use spintax professional template as default (includes {{company_name}})
+        return get_default_template('invoice')
     
     @staticmethod
     def generate_invoice_url(invoice_id: str) -> str:
@@ -143,6 +127,12 @@ Thank you for your business!
                 logger.error(f"Invalid phone number for customer {customer.id}: {str(e)}")
                 return False
             
+            # Get company for company_name
+            company = Company.query.get(company_id)
+            if not company:
+                logger.error(f"Company not found for company_id {company_id}")
+                return False
+            
             # Get template
             template = WhatsAppInvoiceSender.get_invoice_template(company_id)
             
@@ -151,6 +141,7 @@ Thank you for your business!
             
             # Replace placeholders
             message = template
+            message = message.replace('{{company_name}}', company.name)
             message = message.replace('{{customer_name}}', f"{customer.first_name} {customer.last_name}")
             message = message.replace('{{first_name}}', customer.first_name)
             message = message.replace('{{invoice_number}}', invoice.invoice_number)
@@ -160,11 +151,25 @@ Thank you for your business!
             message = message.replace('{{billing_end_date}}', invoice.billing_end_date.strftime('%d/%m/%Y'))
             message = message.replace('{{invoice_link}}', invoice_url)
             
-            # Add plan name if available
-            if customer.service_plan:
-                message = message.replace('{{plan_name}}', customer.service_plan.name)
+            # Add plan name if available (from first active CustomerPackage)
+            # If no plan found, use placeholder text
+            plan_name = ''
+            try:
+                first_pkg = None
+                if hasattr(customer, 'packages'):
+                    first_pkg = customer.packages.filter_by(is_active=True).first()
+                if first_pkg and getattr(first_pkg, 'service_plan', None):
+                    plan_name = first_pkg.service_plan.name
+            except Exception as e:
+                logger.warning(f"Error fetching plan name for customer {customer.id}: {str(e)}")
             
-            # Enqueue message with high priority (priority 0)
+            # Always replace plan_name, even if empty (to prevent {{plan_name}} showing in message)
+            message = message.replace('{{plan_name}}', plan_name if plan_name else 'Internet Service')
+            
+            # Enqueue message using company's configured default invoice priority
+            cfg = WhatsAppConfig.query.filter_by(company_id=company_id).first()
+            invoice_priority = cfg.default_invoice_priority if cfg else 10
+
             WhatsAppQueueService.enqueue_message(
                 company_id=company_id,
                 customer_id=str(customer.id),
@@ -172,7 +177,7 @@ Thank you for your business!
                 message_content=message,
                 message_type='invoice',
                 media_type='text',
-                priority=60,
+                priority=invoice_priority,
                 related_invoice_id=str(invoice.id)
             )
             

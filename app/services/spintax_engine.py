@@ -97,53 +97,72 @@ def validate_spintax(text: str) -> dict:
 # Default Spintax Templates
 # ------------------------------------------------------------------
 
-SPINTAX_INVOICE_TEMPLATE = """[🧾|📄|💰] *[Invoice Generated|Your Bill is Ready|New Invoice]*
+# ------------------------------------------------------------------
+# Professional Spintax Templates (WhatsApp Markdown Optimized)
+# ------------------------------------------------------------------
 
-[Hi|Hello|Dear|Assalam o Alaikum] {{customer_name}},
+SPINTAX_INVOICE_TEMPLATE = """*[🧾 Monthly Invoice | 📄 New Invoice Generated | 🧾 Billing Update]*
 
-Your invoice *{{invoice_number}}* [has been generated|is now ready|is available].
+[Dear | Respected | Assalam-o-Alaikum] *{{customer_name}}*,
 
-*Amount:* Rs. {{amount}}
-*Due Date:* {{due_date}}
-*Billing Period:* {{billing_start_date}} to {{billing_end_date}}
+[We hope you are enjoying our internet service. | Thank you for choosing our network. | We appreciate your continued trust in our services.] 
 
-📄 [View your invoice|Check your bill|See details]: {{invoice_link}}
+[Your invoice for the current billing cycle has been generated. | This is to inform you that your monthly internet bill is ready. | Your latest subscription invoice has been successfully generated.]
 
-[Please make payment before the due date|Kindly pay before the deadline|Payment is due by {{due_date}}].
+*Billing Details:*
+▪ *Invoice No:* {{invoice_number}}
+▪ *Plan:* {{plan_name}}
+▪ *Period:* {{billing_start_date}} to {{billing_end_date}}
+▪ *Total Amount:* Rs. {{amount}}
+▪ *Due Date:* {{due_date}}
 
-[Thank you!|Thanks for your business!|We appreciate your trust!|Regards]""".strip()
+[Kindly arrange the payment before the due date to avoid any service interruption. | Please clear your dues before the deadline for uninterrupted services. | We request you to make the payment before the due date.]
 
+🔗 *View / Download Invoice:* {{invoice_link}}
 
-SPINTAX_REMINDER_TEMPLATE = """[⏰|🔔|⚠️] *[Payment Reminder|Friendly Reminder|Due Date Alert]*
-
-[Hi|Hello|Dear] {{customer_name}},
-
-[This is a reminder|Just a reminder|We'd like to remind you] that your invoice *{{invoice_number}}* [is due on|has a due date of|should be paid by] *{{due_date}}*.
-
-*Amount Due:* Rs. {{amount}}
-
-📄 [View invoice|Pay now|See details]: {{invoice_link}}
-
-[Please ensure timely payment|Kindly clear your dues|We request prompt payment] to avoid [service interruption|disconnection|any disruption].
-
-[Thank you!|Thanks!|Regards]""".strip()
+[Thank you for your business! | Regards, | Best Regards,]
+*{{company_name}}*
+*Support Team*""".strip()
 
 
-SPINTAX_DEADLINE_TEMPLATE = """[🚨|❗|⚠️] *[Urgent: Payment Overdue|Final Notice|Deadline Passed]*
+SPINTAX_REMINDER_TEMPLATE = """*[⏳ Payment Reminder | 🔔 Friendly Reminder | 📅 Invoice Due Soon]*
 
-[Dear|Hi] {{customer_name}},
+[Dear | Respected | Assalam-o-Alaikum] *{{customer_name}}*,
 
-Your invoice *{{invoice_number}}* [was due on|had a deadline of] *{{due_date}}* and [remains unpaid|is still pending|has not been cleared].
+[This is a gentle reminder that your invoice | Just a quick reminder regarding your internet bill | Please note that your monthly invoice] *{{invoice_number}}* [is approaching its due date | is due soon | requires your attention].
 
-*Overdue Amount:* Rs. {{amount}}
+*Outstanding Details:*
+▪ *Amount Payable:* Rs. {{amount}}
+▪ *Due Date:* {{due_date}}
 
-[Your service may be|Service is subject to|Internet access may face] [suspended|interrupted|disconnection] [if not paid immediately|unless payment is received|without immediate payment].
+[Please process your payment at your earliest convenience. | Kindly clear your dues soon to enjoy uninterrupted internet. | We request you to pay the pending amount before the deadline.]
 
-📄 [Pay now|Clear dues|View invoice]: {{invoice_link}}
+🔗 *View Invoice & Pay here:* {{invoice_link}}
 
-[Please pay immediately|Urgent action required|Contact us if you need help].
+_[If you have already paid, please ignore this message. | In case payment has been made, kindly disregard this alert. | Ignore this message if dues are already cleared.]_
 
-[Regards|Thank you]""".strip()
+[Regards, | Best Regards, | Thank you,]
+*{{company_name}}*
+*Billing Department*""".strip()
+
+
+SPINTAX_DEADLINE_TEMPLATE = """*[⚠️ Action Required: Overdue Invoice | 🚨 Service Suspension Notice | ⚠️ Payment Overdue]*
+
+[Dear | Respected | Assalam-o-Alaikum] *{{customer_name}}*,
+
+[We noticed that your payment for invoice | Our records indicate that your invoice | This is an urgent reminder that your bill] *{{invoice_number}}* [is now overdue | has crossed the due date of {{due_date}} | is currently pending].
+
+*Pending Amount:* Rs. {{amount}}
+
+[To prevent automatic suspension of your internet service, please pay immediately. | Your service may be temporarily restricted if payment is not received promptly. | Please clear the dues immediately to avoid automated disconnection.]
+
+🔗 *View Invoice & Pay Now:* {{invoice_link}}
+
+[For any queries, please contact our support team. | If you face any billing issues, reply to this message. | Please reach out if you need assistance.]
+
+[Regards, | Thank you,]
+*{{company_name}}*
+*Billing Department*""".strip()
 
 
 def get_default_template(category: str) -> str:

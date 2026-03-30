@@ -1,6 +1,7 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime, timedelta, date
+import pytz
 import logging
 from app import db
 from app.models import Customer, Invoice, ServicePlan, User, EmployeeLedger
@@ -23,6 +24,8 @@ from app.services.whatsapp_api_client import WhatsAppAPIClient
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+PAK_TZ = pytz.timezone('Asia/Karachi')
+
 # Global scheduler instance
 scheduler = None
 
@@ -34,7 +37,7 @@ def generate_automatic_invoices(app=None):
     Args:
         app: Flask application instance for creating application context
     """
-    logger.info(f"Running automatic invoice generation for date: {datetime.now().date()}")
+    logger.info(f"Running automatic invoice generation for date: {datetime.now(PAK_TZ).date()}")
     
     if app:
         with app.app_context():
@@ -46,7 +49,7 @@ def _process_invoices():
     """
     Internal function to process invoices within an application context
     """
-    today = datetime.now().date()
+    today = datetime.now(PAK_TZ).date()
     
     try:
         # Get all active customers whose recharge date is today
@@ -146,7 +149,7 @@ def process_whatsapp_queue(app=None):
     Sends up to remaining daily quota ordered by priority.
     Runs daily at configured time (default 9:00 AM).
     """
-    logger.info(f"Running WhatsApp queue processor: {datetime.now()}")
+    logger.info(f"Running WhatsApp queue processor: {datetime.now(PAK_TZ)}")
     
     if not app:
         logger.error("No Flask app provided to process_whatsapp_queue")
@@ -245,7 +248,7 @@ def check_deadline_alerts(app=None):
     Check for invoices with upcoming due dates and enqueue alert messages.
     Runs daily at configured time (default 9:00 AM).
     """
-    logger.info(f"Running deadline alerts check: {datetime.now()}")
+    logger.info(f"Running deadline alerts check: {datetime.now(PAK_TZ)}")
     
     if not app:
         logger.error("No Flask app provided to check_deadline_alerts")
@@ -261,7 +264,7 @@ def check_deadline_alerts(app=None):
                 days_before = config.deadline_alert_days_before
                 
                 # Calculate target due date (today + days_before)
-                target_date = date.today() + timedelta(days=days_before)
+                target_date = datetime.now(PAK_TZ).date() + timedelta(days=days_before)
                 
                 # Find invoices due on target date that are still pending/overdue
                 invoices = Invoice.query.filter(
@@ -312,7 +315,7 @@ def reset_whatsapp_quota(app=None):
     """
     Reset daily WhatsApp quota at midnight.
     """
-    logger.info(f"Resetting WhatsApp daily quota: {datetime.now()}")
+    logger.info(f"Resetting WhatsApp daily quota: {datetime.now(PAK_TZ)}")
     
     if not app:
         logger.error("No Flask app provided to reset_whatsapp_quota")
@@ -338,7 +341,7 @@ def accrue_monthly_salaries(app=None):
     Args:
         app: Flask application instance for creating application context
     """
-    logger.info(f"Running monthly salary accrual: {datetime.now()}")
+    logger.info(f"Running monthly salary accrual: {datetime.now(PAK_TZ)}")
     
     if not app:
         logger.error("No Flask app provided to accrue_monthly_salaries")
@@ -348,7 +351,7 @@ def accrue_monthly_salaries(app=None):
         try:
             from app.crud import employee_ledger_crud
             
-            current_month = datetime.now().strftime('%B %Y')  # e.g., "January 2026"
+            current_month = datetime.now(PAK_TZ).strftime('%B %Y')  # e.g., "January 2026"
             
             # Get all active employees with salary > 0
             employees = User.query.filter(
@@ -368,7 +371,7 @@ def accrue_monthly_salaries(app=None):
                     salary_amount = float(employee.salary)
                     
                     # Check if salary already accrued this month (avoid duplicates)
-                    month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                    month_start = datetime.now(PAK_TZ).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
                     existing_accrual = EmployeeLedger.query.filter(
                         EmployeeLedger.employee_id == employee.id,
                         EmployeeLedger.transaction_type == 'salary_accrual',

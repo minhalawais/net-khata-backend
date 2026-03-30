@@ -9,8 +9,11 @@ from sqlalchemy.exc import SQLAlchemyError, IntegrityError, DatabaseError
 import logging
 from sqlalchemy.orm import joinedload
 from datetime import datetime, timedelta
+import pytz
 from sqlalchemy import and_, or_, asc, desc, func
 logger = logging.getLogger(__name__)
+
+PAK_TZ = pytz.timezone('Asia/Karachi')
 
 
 
@@ -65,7 +68,7 @@ def invoice_to_dict(invoice):
 
 def generate_invoice_number():
     try:
-        year = datetime.now().year
+        year = datetime.now(PAK_TZ).year
         prefix = f'INV-{year}-'
         
         # FIX: Explicitly filter for ONLY this year's invoices before getting the latest
@@ -450,7 +453,7 @@ def generate_monthly_invoices(company_id, user_role, current_user_id, ip_address
         - total_customers: Total number of customers processed
     """
     try:
-        today = datetime.now().date()
+        today = datetime.now(PAK_TZ).date()
         
         # Get all active customers whose recharge date is today
         customers = Customer.query.filter(
@@ -826,10 +829,10 @@ def get_customers_for_monthly_invoices(company_id, target_month=None):
     try:
         # Determine target month
         if target_month:
-            year = datetime.now().year
-            target_date = datetime(year, int(target_month), 1)
+            year = datetime.now(PAK_TZ).year
+            target_date = datetime(year, int(target_month), 1, tzinfo=PAK_TZ)
         else:
-            target_date = datetime.now()
+            target_date = datetime.now(PAK_TZ)
             
         # Calculate date range for checking existing invoices (25th of previous month to 4th of current month)
         if target_date.month == 1:
@@ -918,7 +921,7 @@ def generate_bulk_monthly_invoices(company_id, customer_ids, target_month, curre
             raise ValueError("No customers selected for invoice generation")
         
         # Parse target month
-        year = datetime.now().year
+        year = datetime.now(PAK_TZ).year
         target_date = datetime(year, int(target_month), 1)
         
         generated_invoices = []
