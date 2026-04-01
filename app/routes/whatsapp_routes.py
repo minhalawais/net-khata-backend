@@ -374,9 +374,17 @@ def get_config():
         company_id = claims['company_id']
 
         config = WhatsAppConfig.query.filter_by(company_id=company_id).first()
-
+        
         if not config:
             return jsonify({'configured': False, 'message': 'WhatsApp not configured'}), 200
+
+        # Keep UI status accurate: sync DB with live Evolution state when possible.
+        if (config.provider_type or 'evolution') == 'evolution' and config.instance_name:
+            try:
+                evolution_client.update_connection_status(company_id, config.instance_name)
+                db.session.refresh(config)
+            except Exception as sync_err:
+                logger.warning(f"Live status sync skipped in /config: {sync_err}")
 
         return jsonify({
             'configured':      True,
@@ -506,17 +514,31 @@ def test_connection():
 @whatsapp_bp.route('/instance/create', methods=['POST'])
 @jwt_required()
 def create_instance():
-    company_id = get_jwt_identity()
-    
-    # 1. Call your client (which returns success: True but qr_code_base64: "")
+    # CRITICAL FIX: get_jwt_identity() returns the user's UUID (JWT 'sub' claim).
+    # The company_id lives in a custom JWT claim — must use get_jwt() here,
+    # exactly as every other endpoint does. Using the wrong ID caused
+    # _get_config(company_id) inside the client to find nothing, leaving
+    # instance_name / instance_token / phone_connected null in the DB.
+    claims     = get_jwt()
+    company_id = claims['company_id']
+
     result = evolution_client.create_instance(company_id=company_id)
-    
+
     if result.get('success'):
-        # 2. DO NOT throw a 500 error if qr_code_base64 is empty!
-        if not result.get('qr_code_base64'):
-            logger.info(f"Instance created for {company_id}, awaiting asynchronous QR generation via polling.")
-            
-        # 3. Always return 200/201 so the React frontend can start polling
+        if result.get('already_connected'):
+            # Instance is genuinely active — no QR needed.
+            # Frontend should detect this flag and skip the QR flow.
+            logger.info(
+                f"Instance for {company_id} is already connected — "
+                f"returning already_connected=True so the frontend skips QR polling."
+            )
+        elif not result.get('qr_code_base64'):
+            # Instance created/found but QR not yet ready — frontend will poll.
+            logger.info(
+                f"Instance created for {company_id}, awaiting asynchronous "
+                f"QR generation via polling."
+            )
+
         return jsonify(result), 201
     else:
         return jsonify(result), result.get('status_code', 500)

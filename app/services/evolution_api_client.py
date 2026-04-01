@@ -12,7 +12,7 @@ Fixes applied (cumulative):
     - Singleton session reuse pattern
     - v2 payload fields used consistently
 
-  v2 → v3 (current):
+  v2 → v3:
     - _handle_existing_instance: distinguishes between get_qr_code returning
       success=True/empty-QR (instance loading after container restart, not ready)
       vs success=False (actual API error). Previously both paths triggered
@@ -29,6 +29,22 @@ Fixes applied (cumulative):
       avoid going through the 403 handler recursively.
     - send_text / send_media: use self._message_session (pooled) instead of
       bare requests.post() per call.
+
+  v3 → v4 (current):
+    - _handle_existing_instance Step 2a: ZOMBIE STATE FIX.
+      After user explicitly disconnects, Baileys keeps the WebSocket in a
+      half-open state for ~60s while sending keep-alive probes that all time
+      out. During this window, GET /instance/connectionState/{name} returns
+      state='open' — a phantom / zombie connection. The old code trusted this
+      and called _mark_connected_and_return(), setting phone_connected=True in
+      the DB while the WhatsApp session was actually dead. This caused:
+        a. DB in wrong state (thinks it's connected)
+        b. Frontend starting QR polling loop that always got 404
+        c. QR spinner stuck forever
+      FIX: cross-check our own DB. If WhatsAppConfig.phone_connected is False,
+      the user explicitly disconnected and Evolution's 'open' state is stale.
+      We now treat this as NOT connected and proceed to restart the instance to
+      regenerate a fresh QR, bypassing the phantom state entirely.
 """
 
 import os
@@ -65,7 +81,7 @@ _MIME_MAP: Dict[str, str] = {
 
 # Seconds to wait after restart_instance before retrying get_qr_code.
 # Evolution needs time to reload the session from its DB and generate a QR.
-_RESTART_WAIT_SECONDS = 4
+_RESTART_WAIT_SECONDS = 10
 
 
 class EvolutionAPIClient:
@@ -271,10 +287,32 @@ class EvolutionAPIClient:
 
             conn = self.check_connection(instance_name)
             if conn.get('connected'):
-                logger.info(f"Step 2a: '{instance_name}' is already connected — no QR needed")
-                return self._mark_connected_and_return(
-                    company_id, instance_name, conn.get('phone_number', '')
-                )
+                # ── ZOMBIE STATE GUARD ────────────────────────────────────────
+                # Evolution can report state='open' for up to ~60 seconds after
+                # a disconnect while Baileys exhausts its keep-alive probes.
+                # This is a PHANTOM connection — the WhatsApp session is dead.
+                #
+                # Cross-check our own DB: if phone_connected=False the user
+                # explicitly disconnected, so Evolution's 'open' is stale.
+                # We skip 'already connected' and force a restart to get a fresh
+                # QR code instead of leaving the user stuck with a dead session.
+                # ─────────────────────────────────────────────────────────────
+                config = self._get_config(company_id)
+                db_says_connected = config.phone_connected if config else True
+
+                if not db_says_connected:
+                    logger.warning(
+                        f"Step 2a ZOMBIE DETECTED: Evolution reports '{instance_name}' as "
+                        f"'open' but DB says phone_connected=False (user explicitly "
+                        f"disconnected). Treating as stale state — forcing restart to "
+                        f"regenerate QR."
+                    )
+                    # Fall through to Step 2b (restart + retry QR)
+                else:
+                    logger.info(f"Step 2a: '{instance_name}' is genuinely connected — no QR needed")
+                    return self._mark_connected_and_return(
+                        company_id, instance_name, conn.get('phone_number', '')
+                    )
 
             # Not connected — restart to force QR generation
             logger.info(
