@@ -2,10 +2,27 @@ from app import db
 from app.models import SubZone, Area
 from app.utils.logging_utils import log_action
 import uuid
+from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_uuid(value):
+    if isinstance(value, uuid.UUID):
+        return value
+    return uuid.UUID(str(value))
+
+
+def _get_area_for_user(area_id, company_id, user_role):
+    area_uuid = _safe_uuid(area_id)
+    if user_role == 'super_admin':
+        return Area.query.filter_by(id=area_uuid).first()
+    if not company_id:
+        return None
+    company_uuid = _safe_uuid(company_id)
+    return Area.query.filter_by(id=area_uuid, company_id=company_uuid).first()
 
 def get_all_sub_zones(company_id, user_role):
     """Get all sub-zones for a company"""
@@ -29,14 +46,21 @@ def get_all_sub_zones(company_id, user_role):
         logger.error(f"Error getting sub-zones: {str(e)}")
         return []
 
-def get_sub_zones_by_area(area_id, company_id):
-    """Get all sub-zones for a specific area"""
+def get_sub_zones_by_area(area_id, company_id, user_role, include_inactive=False):
+    """Get sub-zones for a specific area with role-aware scoping."""
     try:
-        sub_zones = SubZone.query.filter_by(
-            area_id=area_id,
-            company_id=company_id,
-            is_active=True
-        ).all()
+        area_uuid = _safe_uuid(area_id)
+
+        if user_role == 'super_admin':
+            query = SubZone.query.filter_by(area_id=area_uuid)
+        else:
+            company_uuid = _safe_uuid(company_id)
+            query = SubZone.query.filter_by(area_id=area_uuid, company_id=company_uuid)
+
+        if not include_inactive:
+            query = query.filter_by(is_active=True)
+
+        sub_zones = query.order_by(SubZone.created_at.desc()).all()
         
         return [{
             'id': str(sz.id),
@@ -52,10 +76,29 @@ def get_sub_zones_by_area(area_id, company_id):
 def add_sub_zone(data, user_role, current_user_id, ip_address, user_agent):
     """Add a new sub-zone"""
     try:
+        if not data.get('area_id'):
+            raise ValueError('area_id is required')
+        if not data.get('name') or not data.get('name').strip():
+            raise ValueError('name is required')
+
+        area = _get_area_for_user(data['area_id'], data.get('company_id'), user_role)
+        if not area:
+            raise ValueError('Invalid area selection for this company')
+
+        sub_zone_name = data['name'].strip()
+        duplicate = SubZone.query.filter(
+            SubZone.area_id == area.id,
+            func.lower(SubZone.name) == sub_zone_name.lower(),
+        ).first()
+        if duplicate:
+            raise ValueError('Sub-zone with this name already exists in selected area')
+
+        company_uuid = area.company_id if user_role == 'super_admin' else _safe_uuid(data['company_id'])
+
         new_sub_zone = SubZone(
-            company_id=uuid.UUID(data['company_id']),
-            area_id=uuid.UUID(data['area_id']),
-            name=data['name'],
+            company_id=company_uuid,
+            area_id=area.id,
+            name=sub_zone_name,
             description=data.get('description')
         )
         db.session.add(new_sub_zone)
@@ -70,7 +113,7 @@ def add_sub_zone(data, user_role, current_user_id, ip_address, user_agent):
             data,
             ip_address,
             user_agent,
-            data['company_id']
+            str(company_uuid)
         )
 
         return new_sub_zone
@@ -96,6 +139,21 @@ def update_sub_zone(id, data, company_id, user_role, current_user_id, ip_address
         if not sub_zone:
             return None
 
+        target_area_id = data.get('area_id', str(sub_zone.area_id))
+        target_area = _get_area_for_user(target_area_id, company_id, user_role)
+        if not target_area:
+            raise ValueError('Invalid area selection for this company')
+
+        target_name = data.get('name', sub_zone.name)
+        if target_name and target_name.strip():
+            duplicate = SubZone.query.filter(
+                SubZone.id != sub_zone.id,
+                SubZone.area_id == target_area.id,
+                func.lower(SubZone.name) == target_name.strip().lower(),
+            ).first()
+            if duplicate:
+                raise ValueError('Sub-zone with this name already exists in selected area')
+
         old_values = {
             'name': sub_zone.name,
             'description': sub_zone.description,
@@ -103,10 +161,10 @@ def update_sub_zone(id, data, company_id, user_role, current_user_id, ip_address
             'is_active': sub_zone.is_active
         }
 
-        sub_zone.name = data.get('name', sub_zone.name)
+        sub_zone.name = target_name.strip() if target_name else sub_zone.name
         sub_zone.description = data.get('description', sub_zone.description)
-        if 'area_id' in data:
-            sub_zone.area_id = uuid.UUID(data['area_id'])
+        sub_zone.area_id = target_area.id
+        sub_zone.company_id = target_area.company_id
         if 'is_active' in data:
             sub_zone.is_active = data['is_active']
         

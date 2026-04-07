@@ -1,4 +1,4 @@
-from datetime import timedelta  
+from datetime import timedelta
 import os
 
 class Config:

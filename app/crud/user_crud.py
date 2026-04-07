@@ -190,13 +190,13 @@ def update_profile_picture(user_id, file, ip_address, user_agent):
             'users',
             user.id,
             {'action': 'profile_picture_update'},
-            {'picture': filepath},
+            {'picture': relative_path},
             ip_address,
             user_agent
         )
         
         logger.info(f"Profile picture updated for user {user_id}")
-        return {'success': True, 'picture': filepath}
+        return {'success': True, 'picture': relative_path}
         
     except SQLAlchemyError as e:
         logger.error(f"Database error updating profile picture: {str(e)}")

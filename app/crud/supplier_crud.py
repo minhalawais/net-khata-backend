@@ -33,8 +33,10 @@ def get_all_suppliers(company_id, user_role):
 
 def add_supplier(data, current_user_id, ip_address, user_agent):
     try:
+        company_id = data.get('company_id')
+
         new_supplier = Supplier(
-            company_id=uuid.UUID(data['company_id']),
+            company_id=uuid.UUID(company_id),
             name=data['name'],
             contact_person=data.get('contact_person'),
             email=data['email'],
@@ -52,10 +54,10 @@ def add_supplier(data, current_user_id, ip_address, user_agent):
             new_supplier.id,
             None,
             data,
-                        ip_address,
+            ip_address,
             user_agent,
             company_id
-)
+        )
 
         return new_supplier
     except SQLAlchemyError as e:

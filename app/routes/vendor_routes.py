@@ -37,11 +37,15 @@ def add_new_vendor():
     ip_address = request.remote_addr
     user_agent = request.headers.get('User-Agent')
     
-    # Handle both form data and files
-    data = request.json
-    files = request.files
-    
     try:
+        # Support both application/json and multipart/form-data.
+        # request.json on multipart raises 415, so we must use get_json(silent=True).
+        data = request.get_json(silent=True)
+        if data is None:
+            data = request.form.to_dict()
+
+        files = request.files
+
         new_vendor = vendor_crud.add_vendor(data, files, company_id, user_role, current_user_id, ip_address, user_agent)
         return jsonify({
             'message': 'Vendor added successfully',
@@ -63,11 +67,14 @@ def update_existing_vendor(id):
     ip_address = request.remote_addr
     user_agent = request.headers.get('User-Agent')
     
-    # Handle both form data and files
-    data = request.json
-    files = request.files
-    
     try:
+        # Support both application/json and multipart/form-data.
+        data = request.get_json(silent=True)
+        if data is None:
+            data = request.form.to_dict()
+
+        files = request.files
+
         updated_vendor = vendor_crud.update_vendor(id, data, files, company_id, user_role, current_user_id, ip_address, user_agent)
         if updated_vendor:
             return jsonify({'message': 'Vendor updated successfully'}), 200

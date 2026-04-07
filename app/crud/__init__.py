@@ -19,3 +19,4 @@ from .employee_crud import *
 from .isp_payment_crud import *
 from .expense_crud import *
 from .extra_income_crud import *
+from .company_crud import *

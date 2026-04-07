@@ -122,6 +122,16 @@ async def get_customers():
     page = request.args.get('page', default=1, type=int)
     page_size = request.args.get('page_size', default=50, type=int)
     search = request.args.get('search', default='', type=str)
+    filters_raw = request.args.get('filters', default='', type=str)
+
+    filters = {}
+    if filters_raw:
+        try:
+            parsed_filters = json.loads(filters_raw)
+            if isinstance(parsed_filters, dict):
+                filters = parsed_filters
+        except json.JSONDecodeError:
+            return jsonify({'error': 'Invalid filters format'}), 400
 
     customers = await customer_crud.get_all_customers(
         company_id,
@@ -130,6 +140,7 @@ async def get_customers():
         page=page,
         page_size=page_size,
         search=search,
+        filters=filters,
         paginate=paginate,
     )
     return jsonify(customers), 200

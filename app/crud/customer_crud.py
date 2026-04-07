@@ -8,7 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 import logging
 from datetime import datetime, timedelta
 from flask import jsonify
-from sqlalchemy import or_
+from sqlalchemy import or_, and_
 from sqlalchemy.orm import joinedload
 import re
 import uuid
@@ -25,13 +25,13 @@ from app.services.auto_invoice_service import (
 logger = logging.getLogger(__name__)
 
 
-async def get_all_customers(company_id, user_role, employee_id, page=None, page_size=None, search=None, paginate=False):
+async def get_all_customers(company_id, user_role, employee_id, page=None, page_size=None, search=None, filters=None, paginate=False):
     # Use eager loading for related entities used by list response to avoid N+1 queries.
     query = Customer.query.options(
         joinedload(Customer.area),
         joinedload(Customer.isp),
         joinedload(Customer.sub_zone),
-    ).order_by(Customer.created_at.desc())
+    )
 
     if user_role == 'super_admin':
         pass
@@ -42,6 +42,9 @@ async def get_all_customers(company_id, user_role, employee_id, page=None, page_
     else:
         # Safe default for unknown roles.
         query = query.filter(Customer.company_id == company_id)
+
+    # Keep a pre-filter snapshot for stable stat cards (overall totals should not change with table filters).
+    stats_query = query
 
     if search:
         search_term = f"%{search.strip()}%"
@@ -57,11 +60,81 @@ async def get_all_customers(company_id, user_role, employee_id, page=None, page_
             )
         )
 
+    active_filters = filters if isinstance(filters, dict) else {}
+    for key, raw_value in active_filters.items():
+        if raw_value is None:
+            continue
+
+        value = str(raw_value).strip()
+        if value == "":
+            continue
+
+        search_term = f"%{value}%"
+        lower_value = value.lower()
+
+        if key == 'internet_id':
+            query = query.filter(Customer.internet_id.ilike(search_term))
+        elif key == 'phone_1':
+            query = query.filter(Customer.phone_1.ilike(search_term))
+        elif key == 'phone_2':
+            query = query.filter(Customer.phone_2.ilike(search_term))
+        elif key == 'email':
+            query = query.filter(Customer.email.ilike(search_term))
+        elif key == 'cnic':
+            query = query.filter(Customer.cnic.ilike(search_term))
+        elif key == 'area':
+            query = query.filter(Customer.area.has(Area.name.ilike(search_term)))
+        elif key == 'isp':
+            query = query.filter(Customer.isp.has(ISP.name.ilike(search_term)))
+        elif key == 'sub_zone':
+            query = query.filter(Customer.sub_zone.has(SubZone.name.ilike(search_term)))
+        elif key == 'connection_type':
+            query = query.filter(Customer.connection_type.ilike(search_term))
+        elif key == 'internet_connection_type':
+            query = query.filter(Customer.internet_connection_type.ilike(search_term))
+        elif key == 'tv_cable_connection_type':
+            query = query.filter(Customer.tv_cable_connection_type.ilike(search_term))
+        elif key == 'is_active':
+            if lower_value in ('active', 'true', '1', 'yes'):
+                query = query.filter(Customer.is_active == True)
+            elif lower_value in ('inactive', 'false', '0', 'no'):
+                query = query.filter(Customer.is_active == False)
+        elif key == 'name':
+            query = query.filter(
+                or_(
+                    Customer.first_name.ilike(search_term),
+                    Customer.last_name.ilike(search_term),
+                )
+            )
+        elif key == 'service_plan':
+            query = query.filter(
+                Customer.packages.any(
+                    and_(
+                        CustomerPackage.is_active == True,
+                        CustomerPackage.service_plan.has(ServicePlan.name.ilike(search_term)),
+                    )
+                )
+            )
+
+    query = query.order_by(Customer.created_at.desc())
+
     total = None
+    total_active = None
+    total_inactive = None
+    overall_total = None
+    overall_active = None
+    overall_inactive = None
     if paginate:
         safe_page = max(int(page or 1), 1)
         safe_page_size = max(min(int(page_size or 50), 200), 1)
+
+        overall_total = stats_query.count()
+        overall_active = stats_query.filter(Customer.is_active == True).count()
+        overall_inactive = stats_query.filter(Customer.is_active == False).count()
+
         total = query.count()
+        total_active = query.filter(Customer.is_active == True).count()
+        total_inactive = query.filter(Customer.is_active == False).count()
         customers = query.offset((safe_page - 1) * safe_page_size).limit(safe_page_size).all()
     else:
         customers = query.all()
@@ -179,6 +252,11 @@ async def get_all_customers(company_id, user_role, employee_id, page=None, page_
         'page': safe_page,
         'page_size': safe_page_size,
         'total_pages': total_pages,
+        'total_active': total_active if total_active is not None else 0,
+        'total_inactive': total_inactive if total_inactive is not None else 0,
+        'overall_total': overall_total if overall_total is not None else 0,
+        'overall_active': overall_active if overall_active is not None else 0,
+        'overall_inactive': overall_inactive if overall_inactive is not None else 0,
     }
 
 

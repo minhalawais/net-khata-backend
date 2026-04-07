@@ -19,7 +19,9 @@ def get_sub_zones_by_area(area_id):
     """Get all sub-zones for a specific area"""
     claims = get_jwt()
     company_id = claims['company_id']
-    sub_zones = sub_zone_crud.get_sub_zones_by_area(area_id, company_id)
+    user_role = claims['role']
+    include_inactive = request.args.get('include_inactive', 'false').lower() == 'true'
+    sub_zones = sub_zone_crud.get_sub_zones_by_area(area_id, company_id, user_role, include_inactive)
     return jsonify(sub_zones), 200
 
 @main.route('/sub-zones/add', methods=['POST'])

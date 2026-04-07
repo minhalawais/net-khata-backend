@@ -51,6 +51,7 @@ from . import vendor_routes  # Vendor management routes
 from . import employee_profile_routes  # Employee profile routes
 from . import internal_transfer_routes
 from . import employee_portal_routes  # Employee self-service portal
+from . import company_routes  # Super admin company management routes
 from .whatsapp_routes import whatsapp_bp  # New WhatsApp blueprint import
 
 # Assuming 'monitoring_bp' is from a 'monitoring_routes' module, adding it here

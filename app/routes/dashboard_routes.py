@@ -24,6 +24,17 @@ def get_executive_summary():
     return jsonify(data)
 
 
+@main.route('/dashboard/super-admin-overview', methods=['GET'])
+@jwt_required()
+def get_super_admin_overview():
+    claims = get_jwt()
+    if claims.get('role') != 'super_admin':
+        return jsonify({'error': 'Forbidden: super_admin required'}), 403
+
+    data = dashboard_crud.get_super_admin_overview_data()
+    return jsonify(data), 200
+
+
 @main.route('/dashboard/executive-advanced', methods=['GET'])
 @jwt_required()
 def get_executive_advanced():

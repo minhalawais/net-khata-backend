@@ -121,6 +121,10 @@ def add_employee(data, files, user_role, current_user_id, ip_address, user_agent
             except ValueError:
                 pass
 
+        requested_role = data.get('role')
+        if requested_role == 'super_admin':
+            raise ValueError('super_admin cannot be assigned from employee management')
+
         new_employee = User(
             company_id=uuid.UUID(data['company_id']),
             username=data['username'],
@@ -129,7 +133,7 @@ def add_employee(data, files, user_role, current_user_id, ip_address, user_agent
             last_name=data['last_name'],
             contact_number=data.get('contact_number'),
             cnic=data.get('cnic'),
-            role=data.get('role'),
+            role=requested_role,
             is_active=True,
             # New fields
             emergency_contact=data.get('emergency_contact'),
@@ -237,6 +241,8 @@ def update_employee(id, data, files, company_id, user_role, current_user_id, ip_
         if 'cnic' in data:
             employee.cnic = data['cnic']
         if 'role' in data:
+            if data['role'] == 'super_admin':
+                raise ValueError('super_admin cannot be assigned from employee management')
             employee.role = data['role']
         
         # Update new fields

@@ -1,5 +1,5 @@
 from app import db
-from app.models import Customer, Invoice, Payment, ISPPayment, Complaint, InventoryItem, User, BankAccount, ServicePlan, Area, Task, Supplier, InventoryAssignment, InventoryTransaction, Expense, ExtraIncome, CustomerPackage, InternalTransfer, InvoiceLineItem, ExpenseType
+from app.models import Company, Customer, Invoice, Payment, ISPPayment, Complaint, InventoryItem, User, BankAccount, ServicePlan, Area, Task, Supplier, InventoryAssignment, InventoryTransaction, Expense, ExtraIncome, CustomerPackage, InternalTransfer, InvoiceLineItem, ExpenseType
 from sqlalchemy import func, case, desc
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -12,6 +12,64 @@ import uuid
 from sqlalchemy.dialects.postgresql import UUID
 
 logger = logging.getLogger(__name__)
+
+
+def get_super_admin_overview_data():
+    """Cross-company overview for super_admin landing dashboard."""
+    try:
+        total_companies = Company.query.count()
+        active_companies = Company.query.filter_by(is_active=True).count()
+        total_users = User.query.count()
+        total_customers = Customer.query.count()
+        active_customers = Customer.query.filter_by(is_active=True).count()
+
+        total_collections = db.session.query(func.coalesce(func.sum(Payment.amount), 0)).scalar() or Decimal(0)
+        total_expenses = db.session.query(func.coalesce(func.sum(Expense.amount), 0)).scalar() or Decimal(0)
+        total_extra_income = db.session.query(func.coalesce(func.sum(ExtraIncome.amount), 0)).scalar() or Decimal(0)
+
+        companies = Company.query.order_by(Company.created_at.desc()).all()
+        company_rows = []
+        for c in companies:
+            company_rows.append({
+                'id': str(c.id),
+                'name': c.name,
+                'email': c.email,
+                'contact_number': c.contact_number,
+                'is_active': c.is_active,
+                'users_count': User.query.filter_by(company_id=c.id).count(),
+                'customers_count': Customer.query.filter_by(company_id=c.id).count(),
+                'invoices_count': Invoice.query.filter_by(company_id=c.id).count(),
+                'created_at': c.created_at.isoformat() if c.created_at else None,
+            })
+
+        return {
+            'summary': {
+                'total_companies': total_companies,
+                'active_companies': active_companies,
+                'total_users': total_users,
+                'total_customers': total_customers,
+                'active_customers': active_customers,
+                'total_collections': float(total_collections),
+                'total_expenses': float(total_expenses),
+                'total_extra_income': float(total_extra_income),
+            },
+            'companies': company_rows,
+        }
+    except Exception as e:
+        logger.error(f"Error fetching super admin overview data: {str(e)}")
+        return {
+            'summary': {
+                'total_companies': 0,
+                'active_companies': 0,
+                'total_users': 0,
+                'total_customers': 0,
+                'active_customers': 0,
+                'total_collections': 0,
+                'total_expenses': 0,
+                'total_extra_income': 0,
+            },
+            'companies': [],
+        }
 
 def _signed_payment_amount():
     # Refund invoices should subtract from collections

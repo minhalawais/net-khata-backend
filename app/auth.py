@@ -17,16 +17,17 @@ def login():
     data = request.json
     user = User.query.filter_by(username=data['username']).first()
     if user and check_password_hash(user.password, data['password']):
+        company_id = str(user.company_id) if user.company_id else None
         access_token = create_access_token(
             identity=user.id,
             additional_claims={
                 "id": str(user.id),
-                "company_id": str(user.company_id),
+                "company_id": company_id,
                 "role": user.role
             },
             expires_delta=timedelta(hours=150)
         )
-        return jsonify(token=access_token, role=user.role, company_id=str(user.company_id)), 200
+        return jsonify(token=access_token, id=str(user.id), role=user.role, company_id=company_id), 200
     else:
         return jsonify({"error": "Invalid credentials"}), 401
 
